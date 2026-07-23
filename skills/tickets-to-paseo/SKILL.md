@@ -108,11 +108,25 @@ If provider has **no** thinking options (empty array), omit `--thinking` flag an
 
 Core's `GATE` primitive maps to **two layers** (Paseo 0.1.110 has no daemon gate):
 
-**1. Trigger layer (prompt contract):** Encode close-out steps in agent prompt:
+**1. Trigger layer (prompt contract):** Encode close-out steps in agent prompt with verdict protocol:
 
 ```
-Run /code-review (via the secondary model) before committing.
-DO NOT commit or open a PR until the review passes with no CRITICAL or HIGH issues.
+Before committing, run a code review via the secondary model. The reviewer MUST respond with a verdict in this format:
+
+VERDICT pass
+[optional: preceding lines list issues as [file:line]: <severity>: <summary>]
+
+OR
+
+VERDICT fail
+[file:line]: <severity>: <issue summary>
+...
+
+Severity levels: CRITICAL, HIGH, MEDIUM, LOW.
+Pass = no CRITICAL or HIGH issues. MEDIUM/LOW are warnings only.
+
+Loop fix → re-review until VERDICT pass. Do NOT commit or open PR until you see VERDICT pass.
+If the reviewer fails to emit a verdict, treat it as VERDICT fail and re-invoke with explicit format request.
 ```
 
 **2. Enforcement layer (branch protection):** GitHub branch protection requires CI status check:
