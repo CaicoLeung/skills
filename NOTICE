@@ -1,0 +1,26 @@
+# NOTICE
+
+This repository (`CaicoLeung/skills`) is a **selective fork** of
+[mattpocock/skills](https://github.com/mattpocock/skills) ("Skills for Real
+Engineers"), licensed under the MIT License.
+
+## Upstream attribution
+
+- **Upstream:** https://github.com/mattpocock/skills
+- **License:** MIT — `Copyright (c) 2026 Matt Pocock` (see `LICENSE`)
+- **Remote:** `upstream` points at the source of truth; see
+  [ADR-0001](docs/adr/0001-fork-with-selective-sync.md).
+
+## Nature of this fork
+
+This is **not** a wholesale mirror. Only selected skills and documentation are
+carried; the rest of upstream's tree is intentionally absent. The relationship
+is managed by a documented selective-sync strategy (upstream `remote` for
+fetching, a local override layer in `docs/agents/*` for this fork's own
+conventions). See ADR-0001 for the full rationale.
+
+## Contributions
+
+Additions and modifications made in this repository are licensed under the same
+MIT License, preserving the upstream copyright notice above as the license
+requires.
