@@ -1,3 +1,16 @@
+---
+name: tickets-to-paseo
+description: "Turn ticket data into an executable Paseo workflow — one agent per ticket, gated on /code-review, supervised by the Paseo daemon."
+version: 0.1.0
+requires:
+  - project
+  - tickets
+  - epics
+produces:
+  - workflow
+  - paseo-agents
+---
+
 # Workflow Launcher
 
 This skill receives ticket data — typically from `/to-tickets`, or routed there via `/ask-matt` ([Mattpocock Skills](https://github.com/mattpocock/skills)) — and turns it into an executable Paseo workflow: one agent per ticket, running `/implement` with `/tdd` at the agreed seams and gating each close-out on `/code-review`. The whole graph is supervised by the Paseo daemon.
