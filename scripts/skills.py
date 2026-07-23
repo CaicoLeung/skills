@@ -17,8 +17,9 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -74,19 +75,31 @@ def _extract_workflow_job_names(workflows_dir: Path) -> set[str]:
 
 
 def _get_branch_protection_contexts(repo: str = "CaicoLeung/skills") -> list[str]:
-    """Fetch required status check contexts from branch protection via gh CLI."""
+    """Fetch required status check contexts from branch protection via GitHub REST API.
+
+    Uses GITHUB_TOKEN for auth. Falls back gracefully if unavailable.
+    """
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return []
+
     try:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo}/branches/main/protection"],
-            capture_output=True,
-            text=True,
-            check=True,
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/branches/main/protection",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
         )
-        data = json.loads(result.stdout)
-        contexts = data.get("required_status_checks", {}).get("contexts", [])
-        return contexts
-    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError) as e:
-        # gh CLI not available or not authenticated — fail loudly in CI, warn locally
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            contexts = data.get("required_status_checks", {}).get("contexts", [])
+            return contexts
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as e:
+        # 404 = no protection configured, 403/401 = insufficient permissions
+        if isinstance(e, urllib.error.HTTPError) and e.code in (404, 403, 401):
+            return []  # No/unknown protection or no access = no contexts to check
+        # In CI, fail loudly; locally, skip gracefully
         if os.environ.get("CI"):
             raise RuntimeError(f"Failed to fetch branch protection: {e}") from e
         return []
