@@ -48,17 +48,17 @@ Core's `DEPENDS_ON` primitive maps to Paseo chat rooms for coordination:
    paseo chat create "wf-$workflowId" --purpose "Ticket workflow coordination"
    ```
 
-2. **Post completion signals:** After an agent finishes, post to chat:
+2. **Post completion signals:** After supervisor observes merged-and-gated (PR merged + CI green), post to chat:
    ```bash
-   paseo chat post "wf-$workflowId" "DONE task_$taskId"
+   paseo chat post "wf-$workflowId" "DONE task_$taskId pr=$pr_url merged_at=$timestamp"
    ```
 
-3. **Dependent agents wait:** Dependent tasks use `paseo chat wait` to block until blocker posts completion:
+3. **Dependent agents wait:** Dependent tasks use `paseo chat wait` to block until supervisor posts merged-and-gated:
    ```bash
    paseo chat wait "wf-$workflowId" --filter "DONE task_$blockerId"
    ```
 
-This preserves the dependency graph without daemon-level edges. **This is a gap, not a feature** — live daemon edges would be superior; chat rooms are the closest available surface.
+This preserves the dependency graph with verified completion: dependents unblock only on merged-and-gated, not agent-finished. **This is a gap, not a feature** — live daemon edges would be superior; chat rooms are the closest available surface.
 
 ---
 
@@ -312,6 +312,11 @@ Never restart daemon without explicit user approval — it kills all running age
 | `SUPERVISE` as daemon supervisor | **Does not exist** | Long-running supervisor agent polls GitHub API, posts to chat room |
 
 Adding a second runtime (e.g., OpenAI, non-Paseo) is a **new adapter file** that consumes the same core workflow plan and maps primitives to its surface. No core changes required.
+
+## Version Changes
+
+0.5.0: DEPENDS_ON chat-room handoff clarified — supervisor posts completion signal only after merged-and-gated, not agent-finished. Two-state completion documented: agent-finished (work submitted) vs merged-and-gated (work verified).
+0.4.0: Added SUPERVISE primitive — supervisor agent polls GitHub API, posts merged-and-gated completion, escalates stuck gates within bounded window. Honest reconciliation: polling gate state ≠ polling agents.
 
 ## Requirements
 

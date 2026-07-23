@@ -49,11 +49,15 @@ DEPENDS_ON dependent <- blocker:
 
 **Completion semantics:** By default, `edge_type: "merged-and-gated"`. The blocker is NOT complete until its PR merges AND the required CI check passes. Dependents unblock on verified work, not agent-finished.
 
-**Subgraph scoping:** When a blocker is stuck (gate not converging / not merging within bounded window), only the **transitive closure** of that blocker's dependents are blocked. Independent tasks (no path to the blocker in the DAG) proceed normally. Supervisor computes the blocked subgraph and posts scoped escalation.
+**Two completion states:**
+- `merged-and-gated`: PR merged to base branch AND gate passed (CI green). Supervisor observes this state, posts completion signal. This is the default for PR-based workflows.
+- `agent-finished`: Agent posted `DONE` at turn-end. PR may not exist; gate may not have run. Fallback for pre-supervisor workflows or non-PR tasks — unblocks on unverified work.
 
-**Fallback:** `edge_type: "agent-finished"` for pre-supervisor workflows or non-PR tasks. Not recommended for PR-based workflows — unblocks on unverified work.
+**Critical distinction:** In `wf-skills-1`, DEPENDS_ON resolved to agent-finished — dependents unblocked on unverified work (gap #2). Post-T1, merged-and-gated is the default: the supervisor observes platform state (PR/CI) and posts `DONE task_$taskId pr=$pr_url` only after verification.
 
-**Runtime mapping:** Adapters map to available primitives (chat rooms, daemon edges, supervisor coordination). See SUPERVISE for merged-and-gated enforcement and subgraph isolation.
+**Subgraph scoping:** When a blocker is stuck (gate not converging / not merging within a bounded window), only the **transitive closure** of that blocker's dependents are blocked. Independent tasks (no path to the blocker in the DAG) proceed normally. The supervisor computes the blocked subgraph and posts scoped escalation (gap #3).
+
+**Runtime mapping:** Adapters map to available primitives. Paseo 0.1.110 uses supervisor + chat rooms: the supervisor posts a completion signal only after merged-and-gated, and scopes stuck subgraphs rather than freezing the frontier. Future runtimes with daemon edges would wire `notifyOnMerge` directly.
 
 ---
 
@@ -265,3 +269,8 @@ Generated workflow plans must:
 ## Zero/Low Dep
 
 This core is intentionally zero/low-dependency and provider-neutral. No runtime-specific API calls.
+
+## Version Changes
+
+0.4.0: DEPENDS_ON clarified — completion semantics now explicitly distinguish merged-and-gated (default) from agent-finished. Two-state completion documented: supervisor observes merged-and-gated, posts verified signal; dependents unblock on verified work, not agent-finished. Resolves gap #2.
+0.3.0: Added SUPERVISE primitive — supervisor observes gate/merge state, declares completion only on merged-and-gated, escalates stuck gates within bounded window.
