@@ -101,23 +101,31 @@ REASONING_DEPTH mapping:
 
 ### GATE
 
-Enforce close-out gates before task completion (e.g., `/code-review` must pass).
+Enforce close-out gates before task completion (e.g., `/code-review` must pass). Convergent verdict protocol: gate fails until reviewer emits explicit pass.
 
 **Abstract shape:**
 ```
 GATE task:
-  conditions:
-    - type: "review"
-      reviewer: "secondary_model"
-      pass_criteria: "no_critical_or_high_issues"
+  type: "review"
+  reviewer: "secondary_model"
+  verdict_schema:
+    format: "VERDICT pass|fail"
+    issues_format: "[file:line]: <severity>: <summary>"
+    severity_levels: ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+  convergence_rule:
+    pass: "no CRITICAL or HIGH issues"
+    fail: "any CRITICAL or HIGH issue"
+    loop: "fix → re-review until VERDICT pass"
   action:
     - type: "block_completion"
-      until: "gate_pass"
+      until: "verdict_pass"
     - type: "merge"
       policy: "auto" | "wait-for-human"
 ```
 
-**Runtime mapping:** Adapters encode gates in prompt contracts or runtime hooks, depending on available surface.
+**Verdict protocol:** Reviewer MUST emit final line `VERDICT pass` or `VERDICT fail`. Preceding lines list issues as `[file:line]: <severity>: <summary>`. Gate is NOT satisfied by review execution alone — only by explicit `VERDICT pass`. Non-convergence (no verdict, or `VERDICT fail` with CRITICAL/HIGH) is a failure that surfaces, not a silent stall.
+
+**Runtime mapping:** Adapters encode the verdict schema and convergence rule in the prompt contract that invokes the secondary-model reviewer. The primary agent loops fix → re-review until `VERDICT pass`.
 
 ## Inputs
 
