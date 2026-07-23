@@ -6,7 +6,8 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
+
 
 # Volume root files
 .DocumentRevisions-V100
@@ -45,3 +46,8 @@ $RECYCLE.BIN/
 
 # NFS temporary files
 .nfs*
+
+### Python
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
