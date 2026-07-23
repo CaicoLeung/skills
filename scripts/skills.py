@@ -14,7 +14,10 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +30,108 @@ REQUIRED = FIELDS_SCALAR + FIELDS_LIST
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 DESCRIPTION_MAX = 300
+
+
+# --- Branch protection drift guard ------------------------------------------
+
+
+def _extract_workflow_job_names(workflows_dir: Path) -> set[str]:
+    """Extract top-level job names from all workflow YAML files."""
+    jobs: set[str] = set()
+    if not workflows_dir.exists():
+        return jobs
+
+    for wf_file in workflows_dir.glob("*.yml"):
+        content = wf_file.read_text(encoding="utf-8")
+        lines = content.splitlines()
+
+        in_jobs = False
+        jobs_indent = None
+        for raw in lines:
+            stripped = raw.strip()
+            if stripped == "jobs:":
+                in_jobs = True
+                jobs_indent = len(raw) - len(raw.lstrip())
+                continue
+
+            if in_jobs and raw.strip():
+                current_indent = len(raw) - len(raw.lstrip())
+                # Exit jobs section on same-level or less-indented top-level key
+                if current_indent <= jobs_indent and ":" in raw:
+                    in_jobs = False
+                    continue
+
+                # Job name: exactly one level deeper than jobs:
+                if in_jobs and ":" in raw:
+                    # Must be directly under jobs: (one level of indentation)
+                    line_indent = len(raw) - len(raw.lstrip())
+                    if line_indent == jobs_indent + 2:
+                        potential = raw.strip().split(":", 1)[0].strip()
+                        if potential and not potential.startswith("#"):
+                            jobs.add(potential)
+
+    return jobs
+
+
+def _get_branch_protection_contexts(repo: str = "CaicoLeung/skills") -> list[str]:
+    """Fetch required status check contexts from branch protection via gh CLI."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/branches/main/protection"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        contexts = data.get("required_status_checks", {}).get("contexts", [])
+        return contexts
+    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError) as e:
+        # gh CLI not available or not authenticated — fail loudly in CI, warn locally
+        if os.environ.get("CI"):
+            raise RuntimeError(f"Failed to fetch branch protection: {e}") from e
+        return []
+
+
+def _validate_branch_protection(repo_root: Path) -> list[str]:
+    """Validate that each branch protection context has a matching workflow job name."""
+    errors: list[str] = []
+    workflows_dir = repo_root / ".github" / "workflows"
+
+    job_names = _extract_workflow_job_names(workflows_dir)
+    if not job_names:
+        errors.append("no workflow job names found in .github/workflows/*.yml")
+
+    contexts = _get_branch_protection_contexts()
+    if not contexts:
+        # In CI, empty contexts means the API call failed (already raised above)
+        # Locally, might not be authenticated — skip this check gracefully
+        return errors
+
+    for ctx in contexts:
+        if ctx not in job_names:
+            errors.append(
+                f"branch protection requires context '{ctx}' "
+                f"but no workflow job has that name (found: {sorted(job_names)})"
+            )
+
+    return errors
+
+
+def _validate_branch_protection_info(repo_root: Path) -> list[str]:
+    """Return informational messages about branch protection (non-failing)."""
+    info: list[str] = []
+    workflows_dir = repo_root / ".github" / "workflows"
+    job_names = _extract_workflow_job_names(workflows_dir)
+
+    contexts = _get_branch_protection_contexts()
+    if contexts:
+        orphan_jobs = job_names - set(contexts)
+        if orphan_jobs:
+            info.append(
+                f"note: workflow job(s) {sorted(orphan_jobs)} not required by branch protection"
+            )
+
+    return info
 
 
 @dataclass
@@ -217,6 +322,20 @@ def cmd_validate(args) -> int:
         print(f"\n{len(failed)} skill(s) failed validation.", file=sys.stderr)
         return 1
     print(f"\n{len(skills)} skill(s) valid.")
+
+    # Branch protection drift guard
+    repo_root = skills_root.parent
+    protection_errors = _validate_branch_protection(repo_root)
+    if protection_errors:
+        print("\nBranch protection guard:", file=sys.stderr)
+        for e in protection_errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    # Info-only messages (don't fail)
+    for msg in _validate_branch_protection_info(repo_root):
+        print(f"  {msg}")
+
     return 0
 
 
