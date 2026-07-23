@@ -4,5 +4,5 @@
 
 | Skill | Version | Description | Requires | Produces |
 | --- | --- | --- | --- | --- |
-| [`ticket-workflow-core`](skills/ticket-workflow-core/SKILL.md) | `0.3.0` | Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision. | project, tickets, epics | workflow-plan, task-specifications |
-| [`tickets-to-paseo`](skills/tickets-to-paseo/SKILL.md) | `0.4.0` | Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor). | project, tickets, epics | workflow, paseo-agents |
+| [`ticket-workflow-core`](skills/ticket-workflow-core/SKILL.md) | `0.4.0` | Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision. | project, tickets, epics | workflow-plan, task-specifications |
+| [`tickets-to-paseo`](skills/tickets-to-paseo/SKILL.md) | `0.5.0` | Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor). | project, tickets, epics | workflow, paseo-agents |
