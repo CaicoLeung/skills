@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
-description: "Turn ticket data into an executable Paseo workflow — one agent per ticket, gated on /code-review, supervised by the Paseo daemon."
-version: 0.1.0
+description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts)."
+version: 0.2.0
 requires:
   - project
   - tickets
@@ -11,13 +11,144 @@ produces:
   - paseo-agents
 ---
 
-# Workflow Launcher
+# Paseo Adapter for Ticket Workflow
 
-This skill receives ticket data — typically from `/to-tickets`, or routed there via `/ask-matt` ([Mattpocock Skills](https://github.com/mattpocock/skills)) — and turns it into an executable Paseo workflow: one agent per ticket, running `/implement` with `/tdd` at the agreed seams and gating each close-out on `/code-review`. The whole graph is supervised by the Paseo daemon.
+**Adapter for `ticket-workflow-core`.** Consumes the core's runtime-neutral workflow plan and maps abstract primitives to the Paseo 0.1.110 surface.
+
+## Runtime Mapping: Abstract → Paseo 0.1.110
+
+### EXECUTE → `paseo run`
+
+Core's `EXECUTE` primitive maps to `paseo run`:
+
+```bash
+paseo run \
+  --provider "$provider" \
+  --model "$model" \
+  --mode "$modeId" \
+  --thinking "$thinkingOptionId" \
+  --worktree "$workspace_name" \
+  --base "$base_branch" \
+  --detach \
+  "$prompt"
+```
+
+**Gap note:** Paseo 0.1.110 has no `notifyOnFinish` edge verb. Coordination uses chat rooms (see DEPENDS_ON below).
+
+---
+
+### DEPENDS_ON → Chat Rooms
+
+Core's `DEPENDS_ON` primitive maps to Paseo chat rooms for coordination:
+
+**Gap documentation:** In Paseo 0.1.110, there is NO `notifyOnFinish` dependency-edge verb. The adapter maps dependencies to chat-room handoff:
+
+1. **Create a workflow chat room:**
+   ```bash
+   paseo chat create "wf-$workflowId" --purpose "Ticket workflow coordination"
+   ```
+
+2. **Post completion signals:** After an agent finishes, post to chat:
+   ```bash
+   paseo chat post "wf-$workflowId" "DONE task_$taskId"
+   ```
+
+3. **Dependent agents wait:** Dependent tasks use `paseo chat wait` to block until blocker posts completion:
+   ```bash
+   paseo chat wait "wf-$workflowId" --filter "DONE task_$blockerId"
+   ```
+
+This preserves the dependency graph without daemon-level edges. **This is a gap, not a feature** — live daemon edges would be superior; chat rooms are the closest available surface.
+
+---
+
+### FAILOVER → Schedules + Manual Switch
+
+Core's `FAILOVER` state machine maps to:
+
+1. **Quota probing schedule:**
+   ```bash
+   paseo schedule create --every 15m "probe-primary-quota" \
+     "Check primary provider quota; if restored, switch agents back"
+   ```
+
+2. **Model switching:**
+
+   **Gap documentation:** Paseo 0.1.110 has NO `update_agent` model-mutation API. The adapter cannot change the model of running agents. The closest mapping is:
+
+   - **New agents:** Create on the currently-active provider (primary or secondary)
+   - **In-flight agents:** Cannot switch models mid-flight. They complete on their original provider.
+   - **Recovery:** When quota restores, only **new** agents switch back to primary.
+
+   **Document this as a runtime limitation.** The core abstract primitive assumes live model-switch; this adapter documents that Paseo 0.1.110 lacks that surface.
+
+3. **Failover armed condition:** Only when primary and secondary are on **different providers**. Same provider = `disabled` (quota outage exhausts both).
+
+---
+
+### REASONING_DEPTH → `--thinking` flag
+
+Core's `REASONING_DEPTH` mapping uses `paseo provider models <provider> --thinking`:
+
+```bash
+paseo provider models "$provider" --thinking --json
+```
+
+Map user choices to thinking option IDs:
+- "Low" → lowest ID in array
+- "Medium" → lower-middle ID
+- "High" → upper-middle ID  
+- "Maximum" → highest ID
+
+If provider has **no** thinking options (empty array), omit `--thinking` flag and inform user reasoning-depth is not adjustable for that model.
+
+---
+
+### GATE → Prompt Contract + Branch Protection
+
+Core's `GATE` primitive maps to **two layers** (Paseo 0.1.110 has no daemon gate):
+
+**1. Trigger layer (prompt contract):** Encode close-out steps in agent prompt:
+
+```
+Run /code-review (via the secondary model) before committing.
+DO NOT commit or open a PR until the review passes with no CRITICAL or HIGH issues.
+```
+
+**2. Enforcement layer (branch protection):** GitHub branch protection requires CI status check:
+
+```bash
+gh api -X PUT repos/CaicoLeung/skills/branches/main/protection \
+  --input - <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["validate-skills"]
+  },
+  "enforce_admins": true
+}
+EOF
+```
+
+A PR cannot merge unless `validate-skills` (which runs `scripts/validate-skills.py`) passes.
+
+**Reality:** Enforcement lives at GitHub branch protection. The prompt contract is only the trigger. Paseo 0.1.110 has no daemon gate. See [ADR-0003](../../docs/adr/0003-branch-protection-quality-gate.md).
+
+---
+
+### Workspace → `paseo worktree create`
+
+Core's workspace spec maps to:
+
+```bash
+paseo worktree create "$workspace_name" --base "$base_branch"
+```
+
+---
 
 ## Inputs
 
-Expected parameters:
+Same as core (passes through to `ticket-workflow-core`):
 
 ```json
 {
@@ -28,138 +159,19 @@ Expected parameters:
 }
 ```
 
-If `project` or `tickets` is empty or missing, do not skip ahead to the model questions — collect them first (see _Input_ question below).
-
 ## User Interaction
 
-Before executing the workflow, ask the user up to four questions, in order. Skip the first if the inputs are already populated.
+Delegate model selection questions to core, then execute plan:
 
-### 0. Input (only if parameters are empty)
-
-If `project` or `tickets` is missing, ask before anything else:
-
-> Please provide the project name and the tickets/epics to plan. You can paste output from `/to-tickets`, or describe the work.
-
-Wait for a non-empty payload, then continue.
-
----
-
-### 1. Primary Model
-
-Ask:
-
-> Which model would you like to use as the primary execution model?
-
-Do not hardcode candidates — enumerate them live from the Paseo CLI:
-
-1. `paseo provider ls --json` — list providers; keep only those with `"status": "available"`.
-2. For each available provider, `paseo provider models <provider> --thinking --json` — its models (and thinking option IDs).
-
-Present the resulting models as the option list, each shown as `Label — provider/model` (e.g. `Claude Opus — claude/opus`). Wait for the user's response.
-
----
-
-### 2. Secondary Model
-
-Ask:
-
-> Which model should be used as the fallback and reviewer?
-
-Enumerate options the same way as the primary model (`paseo provider ls` → `paseo provider models <provider> --thinking`). The secondary runs `/code-review` and takes over execution when the primary is unavailable (see _Model Failover_).
-
-**Failover needs a different provider.** Quota is tracked per provider, so selecting the same provider as the primary means a quota outage exhausts both — failover is then impossible and `/code-review` becomes a self-review. If the user picks the same provider, warn explicitly and record `failover: "disabled"` (the secondary then acts as reviewer only). Wait for the user's response.
-
----
-
-### 3. Reasoning Depth
-
-Ask:
-
-> How much reasoning should be applied?
-
-Offer choices, each mapped to one of the thinking option IDs returned by `paseo provider models <provider> --thinking --json` (an ordered list, lowest → highest reasoning):
-
-- Low → the lowest thinking option
-- Medium → the lower-middle option
-- High → the upper-middle option
-- Maximum → the highest thinking option
-
-If the chosen provider/model returns **no** thinking options, omit `thinkingOptionId` entirely (run with the provider default) and tell the user reasoning-depth is not adjustable for that model. Wait for the user's response.
-
-## Execution
-
-After the inputs and the three model answers are collected:
-
-1. **Resolve the model descriptors.** Each selection already carries its `provider/model` string and `modeId` from the live enumeration (see _Primary Model_ / _Secondary Model_), so use those directly — do not re-resolve through a separate tool. The canonical descriptor used everywhere below is `{ provider, model, modeId }`; never hardcode a provider.
-
-2. **Resolve the base branch.** Branch worktrees off the project base branch: read `inputs.metadata.baseBranch`; if absent, fall back to the repository default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, or the Paseo equivalent); if that is unresolved, ask the user before creating any worktree.
-
-3. **Map each ticket to a worktree + agent (all up-front).** For every ticket, `create_worktree` (branch-off from the base branch resolved above), then `create_agent` with `workspace: { kind: "existing", workspaceId }`, `relationship: { kind: "subagent" }`, and an `/implement` initial prompt that names the ticket. Create **all** agents here — do not defer creation for dependencies.
-
-4. **Preserve the graph by declaring edges, not by delaying creation.** Ticket dependencies become Paseo edges declared at creation: for each dependency, set a `notifyOnFinish` edge blocker → dependent. `notifyOnFinish` is a per-edge dependency attribute — it both gates the dependent's start (the daemon holds a dependent until all its blockers finish) and emits the completion notification the clients consume — so order, dependencies, priorities, and milestones (labels) are preserved without creating agents lazily.
-
-5. **Set runtime settings (full descriptor).** Every task gets its primary model descriptor `{ provider, model, modeId }`, its secondary descriptor (fallback/reviewer), and reasoning depth (`thinkingOptionId`, per the mapping in _Reasoning Depth_ — omitted when the provider has no thinking options). For Codex fast mode, pass `settings: { features: { "fast_mode": true } }`.
-
-6. **Encode the close-out gate in the `/implement` prompt contract.** Because `create_agent` is the submit and the daemon owns the async lifecycle, there is no separate pre-commit hook — so the gate is enforced by the initial prompt: instruct each agent to run `/code-review` (via the secondary model) and **not** commit or open a PR until it passes, with `/tdd` driven at the seams agreed during `/grill-with-docs`. This is prompt-contract enforcement, not a daemon gate.
-
-7. **Submit.** `create_agent` is the submit — the Paseo daemon then owns lifecycle, state, and the WebSocket the mobile/desktop clients consume. There is no separate submit call.
-
-8. **Return** the workflow identifier (root agent/workspace id) plus the per-ticket agent ids.
-
-## Model Failover
-
-The primary model is the default execution model for every task. Failover is **armed only when the primary and secondary are on different providers** (see _Secondary Model_); if they share a provider, a quota outage exhausts both, so failover stays `disabled` and the secondary acts as reviewer only.
-
-Quota is provider-specific (calendar month, rolling window, or daily), so drive every transition off a real quota signal, never off a fixed calendar schedule:
-
-- **Primary quota exhausted.** When the primary returns a quota/billing error (or a quota probe reports zero remaining), switch new **and** in-flight tasks to the secondary. Apply this live to running agents with the full descriptor — `update_agent { settings: { model: { provider, model, modeId } } }` (provider + modeId, not a bare string, or the daemon cannot target the correct provider) — and create new agents on the secondary provider.
-- **Primary quota resets.** Switch back **only after a quota probe confirms restoration** on the primary provider (do not assume a billing-period boundary): `update_agent` the running agents back to the primary descriptor, and create new agents on the primary again. Drive the probe on a short health-check cadence rather than a fixed weekly time — e.g. `paseo schedule create --every 15m "probe primary quota; if restored, switch agents back to primary"` (discover the real schedule/quota verbs with `paseo schedule --help` and `paseo provider --help`).
-- **Reviewer role preserved.** While the primary is healthy, the secondary still runs `/code-review`; it only takes over execution during a primary outage.
-
-Switching never loses in-flight work — `update_agent` changes runtime settings without restarting the agent's workspace.
-
-## Paseo CLI
-
-The `paseo` CLI is a thin wrapper over the daemon and mirrors the tool surface. Use whichever is in reach:
-
-```bash
-paseo run --provider codex/gpt-5.4 --mode full-access --worktree feat/x "$(cat ticket-prompt.md)"
-paseo send <agent-id> "run /code-review against main"
-paseo ls                 # agents
-paseo worktree ls        # worktrees
-paseo schedule create --every 15m "probe primary quota; if restored, switch agents back to primary"
-```
-
-Discover the rest with `paseo --help` and `paseo <cmd> --help`. If `paseo` is not on PATH but the desktop app is installed, the bundled binary is conventionally at one of (verify the path exists before relying on it):
-
-- macOS: `/Applications/Paseo.app/Contents/Resources/bin/paseo`
-- Linux: `<install-dir>/resources/bin/paseo`
-- Windows: `C:\Program Files\Paseo\resources\bin\paseo.cmd`
-
-Offer to symlink it to `~/.local/bin/paseo` if the first-run hook didn't — never do it silently.
-
-**Daemon & state.** These are conventional defaults — confirm them at runtime via `paseo daemon status` and `paseo --help` before relying on them, rather than assuming. Typical: listen `127.0.0.1:6767` (`PASEO_LISTEN`); home `~/.paseo` (`PASEO_HOME`); daemon log `$PASEO_HOME/daemon.log`; agent state `$PASEO_HOME/agents/<id>.json`; health `GET http://127.0.0.1:6767/api/health`. Debug in order: `tail -n 200 ~/.paseo/daemon.log` → `paseo daemon status` → `curl -s localhost:6767/api/health`. Never restart the daemon without explicit user approval — it kills every running agent.
-
-**Async by default.** Agents take 10–30+ minutes. Keep the `notifyOnFinish` edges intact (do not disable completion notifications); do not poll `paseo ls` to "check on" a running agent — the notification arrives on its own.
-
-## Requirements
-
-The generated workflow must:
-
-- preserve ticket order
-- preserve dependencies
-- support parallel execution where possible
-- fail over to the secondary model on primary quota exhaustion, and recover automatically when quota resets (armed only when primary/secondary differ by provider)
-
-These are delivered by the workflow running **under the Paseo daemon**, not hand-rolled by this skill. The daemon owns agent lifecycle and the WebSocket the clients consume, so the remaining capabilities are satisfied through daemon-level controls and its status API — discover the exact verbs with `paseo --help` / `paseo <cmd> --help` rather than assuming names:
-
-- allow pausing / resuming / cancellation → daemon agent-lifecycle controls
-- expose execution progress / logs / task status → daemon status API + per-agent state
-- support live updates for the Paseo mobile client → the daemon WebSocket the clients already consume
+1. **Call core** to generate workflow plan (abstract primitives)
+2. **Map plan to Paseo surface** using the mappings above
+3. **Execute workflow:**
+   - Create workflow chat room
+   - Create worktrees and agents (using `paseo run`)
+   - Set up quota probe schedule (if failover armed)
+   - Return workflow ID and agent IDs
 
 ## Output
-
-Return:
 
 ```json
 {
@@ -178,9 +190,54 @@ Return:
       "thinking": "..."
     }
   ],
-  "failover": "armed",
-  "status": "..."
+  "failover": "armed" | "disabled",
+  "status": "...",
+  "chatRoom": "wf-...",
+  "quotaProbeSchedule": "probe-primary-quota"
 }
 ```
 
-Derive `failover` and `status` from daemon state, not constants: `failover` is `"armed"` only when primary and secondary differ by provider (otherwise `"disabled"`); `status` reflects the workflow's real state (e.g. `created`, `running`, `partial`, `failed`) read from the daemon rather than the literal `"created"`.
+## Paseo CLI Reference
+
+Discoverable commands (use `--help` — do not hardcode):
+
+```bash
+paseo run --help                    # EXECUTE
+paseo chat --help                   # DEPENDS_ON coordination
+paseo schedule --help               # FAILOVER quota probing
+paseo worktree --help               # Workspace creation
+paseo provider ls --json            # Provider enumeration
+paseo provider models <p> --thinking --json  # REASONING_DEPTH
+paseo daemon status                 # Runtime confirmation
+```
+
+**Daemon paths (confirm at runtime):**
+- Home: `~/.paseo` (or `PASEO_HOME`)
+- Listen: `127.0.0.1:6767` (or `PASEO_LISTEN`)
+- Logs: `$PASEO_HOME/daemon.log`
+- Health: `GET http://127.0.0.1:6767/api/health`
+
+Never restart daemon without explicit user approval — it kills all running agents.
+
+## Runtime Gaps Documented
+
+| Core Primitive | Paseo 0.1.110 Reality | Adapter Mapping |
+|----------------|----------------------|------------------|
+| `DEPENDS_ON` with `notifyOnFinish` edge | **Does not exist** | Chat room handoff (`paseo chat post / wait`) |
+| `FAILOVER` with live model-switch | **Does not exist** (`update_agent` only metadata) | New agents switch; in-flight agents stay on original model |
+| `GATE` as daemon gate | **Does not exist** | Prompt contract trigger + GitHub branch protection enforcement |
+
+Adding a second runtime (e.g., OpenAI, non-Paseo) is a **new adapter file** that consumes the same core workflow plan and maps primitives to its surface. No core changes required.
+
+## Requirements
+
+Generated workflow must:
+- Preserve ticket order
+- Preserve dependencies (via chat room coordination)
+- Support parallel execution (via chat room waits)
+- Fail over new agents on quota exhaustion (if armed)
+- Enforce close-out gates (via prompt contracts)
+
+## Version Change
+
+0.2.0: Refactored from monolithic skill to Paseo adapter consuming `ticket-workflow-core`. Runtime gaps documented honestly.

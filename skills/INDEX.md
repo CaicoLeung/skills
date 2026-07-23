@@ -4,4 +4,5 @@
 
 | Skill | Version | Description | Requires | Produces |
 | --- | --- | --- | --- | --- |
-| [`tickets-to-paseo`](skills/tickets-to-paseo/SKILL.md) | `0.1.0` | Turn ticket data into an executable Paseo workflow — one agent per ticket, gated on /code-review, supervised by the Paseo daemon. | project, tickets, epics | workflow, paseo-agents |
+| [`ticket-workflow-core`](skills/ticket-workflow-core/SKILL.md) | `0.1.0` | Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, and gates. | project, tickets, epics | workflow-plan, task-specifications |
+| [`tickets-to-paseo`](skills/tickets-to-paseo/SKILL.md) | `0.2.0` | Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts). | project, tickets, epics | workflow, paseo-agents |
