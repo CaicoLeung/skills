@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
 description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts)."
-version: 0.3.0
+version: 0.3.1
 requires:
   - project
   - tickets
@@ -25,13 +25,14 @@ Core's `EXECUTE` primitive maps to `paseo run`:
 paseo run \
   --provider "$provider" \
   --model "$model" \
-  --mode "$modeId" \
+  --mode bypassPermissions \
   --thinking "$thinkingOptionId" \
   --worktree "$workspace_name" \
   --base "$base_branch" \
   --detach \
   "$prompt"
 ```
+> **Mode (robustness):** Detached autonomous agents MUST run in a mode that cannot stall on a permission prompt — a blocked prompt under `--detach` produces an *absence of signal* indistinguishable from a stuck gate (the failure this workflow exists to close). For `claude` use `--mode bypassPermissions` (valid modes: `plan, default, acceptEdits, auto, bypassPermissions`). Providers with no bypass-equivalent (e.g. `pi`, which exposes no modes) MUST be invoked read-only (reviewer pattern: "Do not modify any files") so no permission can ever be requested.
 
 **Gap note:** Paseo 0.1.110 has no `notifyOnFinish` edge verb. Coordination uses chat rooms (see DEPENDS_ON below).
 
@@ -53,9 +54,11 @@ Core's `DEPENDS_ON` primitive maps to Paseo chat rooms for coordination:
    paseo chat post "wf-$workflowId" "DONE task_$taskId"
    ```
 
-3. **Dependent agents wait:** Dependent tasks use `paseo chat wait` to block until blocker posts completion:
+3. **Dependent agents wait:** Dependent tasks block until the blocker posts completion. **`paseo chat wait` in 0.1.110 has no `--filter` flag** — it only blocks for the next message (optional `--timeout`); filter client-side:
    ```bash
-   paseo chat wait "wf-$workflowId" --filter "DONE task_$blockerId"
+   until paseo chat read "wf-$workflowId" | grep -q "DONE task_$blockerId"; do
+     paseo chat wait "wf-$workflowId" --timeout 30m
+   done
    ```
 
 This preserves the dependency graph without daemon-level edges. **This is a gap, not a feature** — live daemon edges would be superior; chat rooms are the closest available surface.
@@ -249,3 +252,4 @@ Generated workflow must:
 ## Version Change
 
 0.2.0: Refactored from monolithic skill to Paseo adapter consuming `ticket-workflow-core`. Runtime gaps documented honestly.
+0.3.1: Launch robustness — detached agents require `--mode bypassPermissions` (a permission stall under `--detach` mimics a stuck gate, the exact absence-of-signal this workflow closes); corrected `DEPENDS_ON` — `paseo chat wait` (0.1.110) has no `--filter`, so dependents filter client-side.
