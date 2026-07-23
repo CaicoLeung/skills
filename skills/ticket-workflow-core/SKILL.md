@@ -1,7 +1,7 @@
 ---
 name: ticket-workflow-core
-description: "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, and gates."
-version: 0.2.0
+description: "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision."
+version: 0.4.0
 requires:
   - project
   - tickets
@@ -38,16 +38,22 @@ EXECUTE task:
 
 ### DEPENDS_ON
 
-Declare a dependency between tasks: a dependent waits until all its blockers finish.
+Declare a dependency between tasks: a dependent waits until all its blockers finish and are **merged-and-gated** (PR merged to base branch AND close-out gate passed).
 
 **Abstract shape:**
 ```
 DEPENDS_ON dependent <- blocker:
-  edge_type: "completion" | "signal"
+  edge_type: "merged-and-gated" | "agent-finished"
   notify: bool
 ```
 
-**Runtime mapping:** Adapters map to their available coordination primitives (e.g., Paseo chat rooms, daemon edges, or manual polling).
+**Completion semantics:** By default, `edge_type: "merged-and-gated"`. The blocker is NOT complete until its PR merges AND the required CI check passes. Dependents unblock on verified work, not agent-finished.
+
+**Subgraph scoping:** When a blocker is stuck (gate not converging / not merging within bounded window), only the **transitive closure** of that blocker's dependents are blocked. Independent tasks (no path to the blocker in the DAG) proceed normally. Supervisor computes the blocked subgraph and posts scoped escalation.
+
+**Fallback:** `edge_type: "agent-finished"` for pre-supervisor workflows or non-PR tasks. Not recommended for PR-based workflows — unblocks on unverified work.
+
+**Runtime mapping:** Adapters map to available primitives (chat rooms, daemon edges, supervisor coordination). See SUPERVISE for merged-and-gated enforcement and subgraph isolation.
 
 ---
 
@@ -126,6 +132,57 @@ GATE task:
 **Verdict protocol:** Reviewer MUST emit final line `VERDICT pass` or `VERDICT fail`. Preceding lines list issues as `[file:line]: <severity>: <summary>`. Gate is NOT satisfied by review execution alone — only by explicit `VERDICT pass`. Non-convergence (no verdict, or `VERDICT fail` with CRITICAL/HIGH) is a failure that surfaces, not a silent stall.
 
 **Runtime mapping:** Adapters encode the verdict schema and convergence rule in the prompt contract that invokes the secondary-model reviewer. The primary agent loops fix → re-review until `VERDICT pass`.
+
+---
+
+### SUPERVISE
+
+Supervisor role observes gate/merge state for a set of tasks, declares completion only on **merged-and-gated** (PR merged to base branch AND required CI checks passed), escalates within bounded window on stuck gates, isolates stuck subgraphs so independent tasks proceed.
+
+**Abstract shape:**
+```
+SUPERVISE workflow:
+  tasks: [task_ids...]
+  dependencies: { dependent_id: [blocker_ids...] }
+  base_branch: string
+  bounded_window:
+    interval_sec: 60
+    max_wait_sec: 3600
+    escalation_target: workflow_chat_room
+  completion_condition:
+    type: "merged-and-gated"
+    required_check: "validate-skills"
+  escalation_action:
+    type: "post_stuck_gate_alert"
+    format: "STUCK_SUBGRAPH blocker=$taskId blocked=[$dependentIds...] pr=$pr_url reason=$reason"
+```
+
+**Semantics:**
+- Supervisor polls PR and CI state (via adapter API) — NOT agent internals.
+- Completes only when all tasks' PRs are merged AND required CI checks passed.
+- Stuck gate detection: after `max_wait_sec`, compute transitive closure of blocked tasks, escalate to chat room.
+- **Subgraph isolation:** Only transitive dependents of the stuck blocker are blocked; independent tasks proceed normally.
+- Polling gate state is NOT the "don't poll agents" anti-pattern — that warned against polling agent internals; gates are platform state you MUST observe because stuck = absence of notification.
+
+**Completion signal:** When task is merged-and-gated, supervisor posts:
+```
+DONE task_$taskId pr=$pr_url merged_at=$timestamp
+```
+Dependents wait for this signal, not agent-finished.
+
+**Escalation signal:** When task stuck beyond `max_wait_sec`, supervisor posts:
+```
+STUCK_SUBGRAPH blocker=$taskId blocked=[$dependentIds...] pr=$pr_url reason=timeout_after_${max_wait_sec}s
+```
+Dependents in `blocked` list wait on this blocker; others ignore.
+
+**Honest reconciliation:**
+- DON'T poll agents (use `notifyOnFinish` / chat-room signals).
+- DO poll gate state (PR/CI) via platform API — supervisor's job.
+- Stuck = absence of signal; bounded window is the only way to detect it.
+- **Isolated blockage:** One stuck PR does NOT freeze the entire frontier — only its transitive dependents.
+
+**Runtime mapping:** Adapters implement supervisor via their git host's API (e.g., `gh pr view`, `gh api` for GitHub). Bounded window interval and timeout are configurable defaults. Subgraph computation uses the dependency graph passed at workflow generation.
 
 ## Inputs
 

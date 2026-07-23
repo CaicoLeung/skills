@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
-description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts)."
-version: 0.3.0
+description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor)."
+version: 0.5.0
 requires:
   - project
   - tickets
@@ -167,6 +167,54 @@ paseo worktree create "$workspace_name" --base "$base_branch"
 
 ---
 
+### SUPERVISE → Supervisor Agent via `gh` CLI + Chat Room
+
+Core's `SUPERVISE` primitive maps to a supervisor agent that polls PR/CI state via GitHub CLI, posts completion/stuck-subgraph signals to the workflow chat room, isolates blocked tasks so independent tickets proceed.
+
+**Implementation shape:**
+
+1. **Supervisor agent lifecycle:** Created after all leaf agents, runs in dedicated supervisor workspace. Receives dependency graph from workflow plan.
+
+2. **Poll PR state:**
+   ```bash
+   gh pr view "$pr_number" --json state,mergeable,mergedAt,headRefOid -q '.state'
+   ```
+
+3. **Poll CI status:**
+   ```bash
+   gh api "repos/OWNER/REPO/commits/$commit_sha/status" \
+     --jq '.statuses[] | select(.context=="validate-skills") | .state'
+   ```
+
+4. **Completion condition:**
+   - PR state = `MERGED`
+   - CI check = `success`
+   - Once met, post to chat room:
+     ```bash
+     paseo chat post "wf-$workflowId" \
+       "DONE task_$taskId pr=$pr_url merged_at=$timestamp"
+     ```
+
+5. **Bounded triage window:**
+   - Poll every `interval_sec` (default 60s)
+   - If not merged-and-gated within `max_wait_sec` (default 3600s):
+     - **Compute transitive closure:** Walk dependency graph to find all tasks that (directly or indirectly) depend on the stuck blocker.
+     - **Scoped escalation:** Post to chat room:
+       ```bash
+       paseo chat post "wf-$workflowId" \
+         "STUCK_SUBGRAPH blocker=$taskId blocked=[$dependentIds...] pr=$pr_url reason=timeout_after_${max_wait_sec}s"
+       ```
+   - Independent tasks (not in `blocked` list) ignore this signal and proceed.
+   - Continue polling; human fix allows gate to proceed.
+
+6. **Completion semantics:** Dependents unblock on supervisor's `DONE task_$taskId pr=...` signal, not agent's `DONE task_$taskId`. Supervisor posts only after merged-and-gated.
+
+**Subgraph isolation mapping:** Paseo 0.1.110 has no daemon-level dependency edges. The supervisor computes the blocked subgraph from the dependency graph passed at workflow generation and posts a scoped escalation to the chat room. Dependent tasks filter for their blocker in the `blocked` list; independent tasks proceed without waiting.
+
+**Gap documentation:** Paseo 0.1.110 has no daemon supervisor. Adapter implements supervisor as a long-running agent that polls GitHub API. This is correct pattern — polling *gate state* ≠ polling *agent internals*. See ADR-0006.
+
+---
+
 ## Inputs
 
 Same as core (passes through to `ticket-workflow-core`):
@@ -190,7 +238,8 @@ Delegate model selection questions to core, then execute plan:
    - Create workflow chat room
    - Create worktrees and agents (using `paseo run`)
    - Set up quota probe schedule (if failover armed)
-   - Return workflow ID and agent IDs
+   - Create supervisor agent (polls PR/CI state, posts completion/stuck-gate signals)
+   - Return workflow ID, agent IDs, and supervisor ID
 
 ## Output
 
@@ -215,7 +264,12 @@ Delegate model selection questions to core, then execute plan:
   "merge": "auto" | "wait-for-human",
   "status": "...",
   "chatRoom": "wf-...",
-  "quotaProbeSchedule": "probe-primary-quota"
+  "quotaProbeSchedule": "probe-primary-quota",
+  "supervisor": {
+    "agentId": "...",
+    "boundedWindow": { "intervalSec": 60, "maxWaitSec": 3600 },
+    "completionCondition": { "type": "merged-and-gated", "requiredCheck": "validate-skills" }
+  }
 }
 ```
 
@@ -225,12 +279,19 @@ Discoverable commands (use `--help` — do not hardcode):
 
 ```bash
 paseo run --help                    # EXECUTE
-paseo chat --help                   # DEPENDS_ON coordination
+paseo chat --help                   # DEPENDS_ON coordination, supervisor signals
 paseo schedule --help               # FAILOVER quota probing
 paseo worktree --help               # Workspace creation
 paseo provider ls --json            # Provider enumeration
 paseo provider models <p> --thinking --json  # REASONING_DEPTH
 paseo daemon status                 # Runtime confirmation
+```
+
+**GitHub CLI (supervisor uses these):**
+```bash
+gh pr view <number> --json state,mergedAt,headRefOid  # Poll PR state
+gh api repos/OWNER/REPO/commits/$sha/status           # Poll CI checks
+gh pr merge --auto --squash --delete-branch           # Enable auto-merge
 ```
 
 **Daemon paths (confirm at runtime):**
@@ -248,6 +309,7 @@ Never restart daemon without explicit user approval — it kills all running age
 | `DEPENDS_ON` with `notifyOnFinish` edge | **Does not exist** | Chat room handoff (`paseo chat post / wait`) |
 | `FAILOVER` with live model-switch | **Does not exist** (`update_agent` only metadata) | New agents switch; in-flight agents stay on original model |
 | `GATE` as daemon gate | **Does not exist** | Prompt contract trigger + GitHub branch protection enforcement |
+| `SUPERVISE` as daemon supervisor | **Does not exist** | Long-running supervisor agent polls GitHub API, posts to chat room |
 
 Adding a second runtime (e.g., OpenAI, non-Paseo) is a **new adapter file** that consumes the same core workflow plan and maps primitives to its surface. No core changes required.
 
@@ -259,7 +321,11 @@ Generated workflow must:
 - Support parallel execution (via chat room waits)
 - Fail over new agents on quota exhaustion (if armed)
 - Enforce close-out gates (via prompt contracts)
+- Supervisor observes PR/CI state, posts completion only on merged-and-gated
 
 ## Version Change
 
+0.5.0: Added subgraph scoping to SUPERVISE — when a blocker is stuck, only its transitive dependents are blocked; independent tasks proceed. Supervisor computes blocked subgraph from dependency graph and posts scoped escalation.
+0.4.0: Added SUPERVISE primitive — supervisor agent polls GitHub API, posts merged-and-gated completion, escalates stuck gates within bounded window. Honest reconciliation: polling gate state ≠ polling agents.
+0.3.0: Added merge policy option (auto vs wait-for-human) to GATE primitive; maps to GitHub auto-merge.
 0.2.0: Refactored from monolithic skill to Paseo adapter consuming `ticket-workflow-core`. Runtime gaps documented honestly.
