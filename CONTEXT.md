@@ -15,6 +15,9 @@ synonyms. Architecture decisions live in [`docs/adr/`](docs/adr/).
 - **Worktree** — a git worktree branched off the project's base branch, created
   one per ticket as that agent's isolated workspace. Base branch resolved from
   `inputs.metadata.baseBranch`, else the repo default branch.
+  _Avoid_: "main branch" — the base branch is configurable and may not be
+  literally `main`; treat "main branch" as a loose synonym, never the literal
+  merge target.
 
 - **Agent / subagent** — a Paseo agent executing a skill prompt (e.g.
   `/implement`). Created with `relationship: { kind: "subagent" }` inside an
@@ -26,6 +29,16 @@ synonyms. Architecture decisions live in [`docs/adr/`](docs/adr/).
   finish) **and** emits the completion notification clients consume. Ticket
   dependencies are preserved by declaring these edges up-front, not by delaying
   agent creation.
+
+- **Close-out gate** — the conditions that must all hold before a ticket's PR may
+  merge: the AI `/code-review` (run by the secondary model) passed, **and** the
+  required CI status check is green. Both are universal — never optional, never
+  bypassed. A human approving review is the only optional component, toggled per
+  the merge setting; it stacks on top of the AI and CI gates, never replaces
+  them.
+  _Avoid_: quality gate (too vague), review (overloaded — means the AI
+  `/code-review`, the CI check, or a human approving review depending on
+  context)
 
 - **Quota failover** — switching execution to the secondary provider when the
   primary's quota is exhausted, and back again when a quota probe confirms
