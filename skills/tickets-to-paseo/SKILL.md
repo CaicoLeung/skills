@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
 description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts)."
-version: 0.2.0
+version: 0.3.0
 requires:
   - project
   - tickets
@@ -134,6 +134,13 @@ A PR cannot merge unless `validate-skills` (which runs `scripts/validate-skills.
 
 **Reality:** Enforcement lives at GitHub branch protection. The prompt contract is only the trigger. Paseo 0.1.110 has no daemon gate. See [ADR-0003](../../docs/adr/0003-branch-protection-quality-gate.md).
 
+**3. Merge step (merge policy):** Once the close-out gate holds (review passed + CI green), the agent's action depends on `mergePolicy` from the core plan:
+
+- **`"auto"`** → the agent enables GitHub auto-merge on its PR: `gh pr merge --auto --squash --delete-branch`. GitHub performs the merge the instant branch-protection rules pass.
+- **`"wait-for-human"`** (default) → the agent opens the PR and does **not** enable auto-merge, leaving it for a human to review and merge.
+
+The agent never performs the merge itself — merge authority is branch protection + auto-merge. Squash + delete-branch is the fixed adapter default (not a launch question). See [ADR-0005](../../docs/adr/0005-auto-merge-via-branch-protection.md).
+
 ---
 
 ### Workspace → `paseo worktree create`
@@ -191,6 +198,7 @@ Delegate model selection questions to core, then execute plan:
     }
   ],
   "failover": "armed" | "disabled",
+  "merge": "auto" | "wait-for-human",
   "status": "...",
   "chatRoom": "wf-...",
   "quotaProbeSchedule": "probe-primary-quota"

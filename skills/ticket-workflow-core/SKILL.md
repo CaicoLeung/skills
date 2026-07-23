@@ -1,7 +1,7 @@
 ---
 name: ticket-workflow-core
 description: "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, and gates."
-version: 0.1.0
+version: 0.2.0
 requires:
   - project
   - tickets
@@ -113,6 +113,8 @@ GATE task:
   action:
     - type: "block_completion"
       until: "gate_pass"
+    - type: "merge"
+      policy: "auto" | "wait-for-human"
 ```
 
 **Runtime mapping:** Adapters encode gates in prompt contracts or runtime hooks, depending on available surface.
@@ -140,6 +142,7 @@ GATE task:
   "primaryModel": { "provider": "...", "model": "...", "modeId": "..." },
   "secondaryModel": { "provider": "...", "model": "...", "modeId": "..." },
   "reasoningDepth": "...",
+  "mergePolicy": "auto" | "wait-for-human",
   "failover": { "armed": true|false, "active": "primary" },
   "tasks": [
     {
@@ -171,7 +174,9 @@ GATE task:
 
 5. **Encode close-out gates.** Each task gets a `GATE` specifying review requirements.
 
-6. **Emit workflow plan.** Return complete plan for adapter execution.
+6. **Resolve merge policy.** Ask whether PRs auto-merge or wait for human review once the close-out gate holds. Default = **wait-for-human** (safe-by-default; auto-merge is opt-in). Record as `mergePolicy` on the plan and as the merge action on each task's `GATE`. The policy is runtime-neutral; the adapter maps it to its git host's merge mechanism.
+
+7. **Emit workflow plan.** Return complete plan for adapter execution.
 
 ## Adapter Contract
 
@@ -181,7 +186,7 @@ Adapters (e.g., `tickets-to-paseo`) consume this core's workflow plan and map pr
 2. **Map DEPENDS_ON** to available coordination primitives (honest about gaps)
 3. **Map FAILOVER** to their quota detection and model-switch capabilities
 4. **Map REASONING_DEPTH** using provider thinking options
-5. **Map GATE** to prompt contracts or runtime hooks
+5. **Map GATE** to prompt contracts or runtime hooks, including the merge policy (`"auto"` / `"wait-for-human"`) → the git host's merge mechanism (e.g., GitHub auto-merge)
 
 ## Requirements
 
