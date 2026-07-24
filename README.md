@@ -25,10 +25,10 @@ Start with **[Flows](./docs/flows.md)** — pick your starting point and follow 
 arrows. The happy path (a `task` ticket) runs end-to-end: route → implement →
 independent review → derived verdict → merge → close.
 
-> **New here?** The single idea: a ticket carries two labels (readiness + type).
-> The loop gates on readiness, dispatches on type, and for code delivery drives
-> an independent review to a *derived* verdict before it merges and closes. Read
-> [Flows](./docs/flows.md) once and you'll know which skill runs next.
+> **New here?** Read [Flows](./docs/flows.md) once — it explains how the three
+> skills layer and which runs next. (TL;DR: tickets carry two labels (readiness +
+> type); the loop gates on readiness, dispatches on type, and for `task` tickets
+> drives an independent review to a derived verdict before merge.)
 
 ## Concepts and decisions
 

@@ -75,6 +75,10 @@ python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail      # →
 See [`docs/agents/closeout.md`](./agents/closeout.md) for the close-out shape,
 invariants, and demo procedure.
 
+> **Note:** The core (`ticket-workflow-core`) and adapter (`tickets-to-paseo`) skills
+> power Flow E's multi-ticket orchestration; they're not visible in single-ticket
+> flows like this one.
+
 ## Flow B: research
 
 ```
