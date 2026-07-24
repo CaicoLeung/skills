@@ -275,8 +275,16 @@ def paseo_run_command(
 
 
 def workspace_name(issue_number: int, turn: Turn) -> str:
-    """Deterministic worktree name for a ticket's turn."""
-    slug = (turn.skill or turn.action).replace("/", "-").replace(" ", "-")
+    """Deterministic worktree name for a ticket's turn.
+
+    A dispatched ``task`` carries two skill names in one string
+    (``/implement + /code-review``); the worktree is named after the *primary*
+    skill (the one that owns the workspace and opens the PR) so the slug stays
+    readable — no stray ``+`` or leading dash.
+    """
+    raw = turn.skill or turn.action
+    primary = raw.split("+", 1)[0].strip().lstrip("/")
+    slug = primary.replace("/", "-").replace(" ", "-") or turn.action
     return f"issue-{issue_number}-{slug}"
 
 
@@ -298,6 +306,28 @@ def _turn_command(cfg: DriverConfig, issue_number: int, turn: Turn) -> list[str]
     else:
         prompt = dispatch_prompt(turn.skill, issue_number)
     return paseo_run_command(cfg, workspace_name(issue_number, turn), prompt)
+
+
+def turn_status(turn: Turn, issue_number: int) -> str:
+    """The human-readable outcome of a planned/executed turn.
+
+    Total over every action: pause, stop, close, and the dispatched skill
+    turns. Encodes the ADR-0008 §3 invariant that HITL types pause for the
+    human turn — their status is distinct from AFK so a consumer never
+    mistakes a human-needed turn for a fire-and-forget one. ``mode`` is
+    therefore not mere metadata; it shapes the outcome the loop reports.
+    """
+    if turn.action == ACTION_PAUSE:
+        return "paused for reporter (needs-info); re-triage on update"
+    if turn.action == ACTION_STOP:
+        return "stopped; left for a human (ready-for-human)"
+    if turn.action == ACTION_CLOSE:
+        return "closed (wontfix)"
+    if turn.opens_pr:
+        return f"implement turn invoked; PR opened (Fixes #{issue_number})"
+    if turn.mode == "HITL":
+        return f"{turn.skill} turn invoked; paused for human turn (HITL)"
+    return f"{turn.skill} turn invoked (AFK)"
 
 
 def run_ticket_loop(
@@ -355,25 +385,18 @@ def run_ticket_loop(
     # turns carry a command built once by _turn_command, so the dry-run
     # preview matches what runs.
     if turn.action == ACTION_PAUSE:
-        report["status"] = "paused for reporter (needs-info); re-triage on update"
+        report["status"] = turn_status(turn, issue_number)
         return report
 
     if turn.action == ACTION_STOP:
-        report["status"] = "stopped; left for a human (ready-for-human)"
+        report["status"] = turn_status(turn, issue_number)
         return report
 
     if not command:
         return report
 
     run(command)
-    if turn.action == ACTION_CLOSE:
-        report["status"] = "closed (wontfix)"
-    elif turn.opens_pr:
-        report["status"] = (
-            f"implement turn invoked; PR opened (Fixes #{issue_number})"
-        )
-    else:
-        report["status"] = f"{turn.skill} turn invoked"
+    report["status"] = turn_status(turn, issue_number)
     return report
 
 

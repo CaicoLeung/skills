@@ -162,6 +162,71 @@ def main() -> int:
         raised = True
     _check(raised, "ambiguous type labels must raise, not pick silently", failed)
 
+    # --- workspace_name: clean slug; no stray '+' or leading dash ---------
+    # A `task` turn's skill packs "/implement + /code-review"; the worktree
+    # must be named after the primary skill, not the whole packed string.
+    print("workspace_name: readable slug (primary skill only):")
+    _check(
+        loop.workspace_name(28, loop.plan_turn(["ready-for-agent", "task"], 28))
+        == "issue-28-implement",
+        "task worktree must name the primary skill (/implement), "
+        "not the packed '/implement + /code-review' string",
+        failed,
+    )
+    _check(
+        loop.workspace_name(7, loop.plan_turn(["ready-for-agent", "grilling"], 7))
+        == "issue-7-grilling",
+        "grilling worktree must slug to 'grilling'",
+        failed,
+    )
+    _check(
+        loop.workspace_name(7, loop.plan_turn([], 7)) == "issue-7-triage",
+        "triage worktree must slug to 'triage'",
+        failed,
+    )
+
+    # --- turn_status: HITL pauses; AFK does not (mode is not metadata) ----
+    # The ADR-0008 §3 invariant: a HITL turn's outcome must be visibly
+    # distinct from an AFK turn so no consumer fakes the human's side.
+    print("turn_status: HITL pauses for the human turn, AFK does not:")
+    task_turn = loop.plan_turn(["ready-for-agent", "task"], 28)
+    _check(
+        "PR opened (Fixes #28)" in loop.turn_status(task_turn, 28),
+        "task status must report the PR with 'Fixes #N'",
+        failed,
+    )
+    proto = loop.plan_turn(["ready-for-agent", "prototype"], 9)
+    proto_status = loop.turn_status(proto, 9)
+    _check(
+        "paused for human turn (HITL)" in proto_status and "AFK" not in proto_status,
+        "prototype (HITL) status must signal a pause for the human turn",
+        failed,
+    )
+    research = loop.plan_turn(["ready-for-agent", "research"], 9)
+    research_status = loop.turn_status(research, 9)
+    _check(
+        "(AFK)" in research_status and "paused" not in research_status,
+        "research (AFK) status must not claim a human pause",
+        failed,
+    )
+
+    # Pure motions carry their own status — turn_status is total over actions.
+    _check(
+        "paused" in loop.turn_status(loop.plan_turn(["needs-info"], 3), 3),
+        "needs-info status must report the pause",
+        failed,
+    )
+    _check(
+        "stopped" in loop.turn_status(loop.plan_turn(["ready-for-human"], 3), 3),
+        "ready-for-human status must report the stop",
+        failed,
+    )
+    _check(
+        loop.turn_status(loop.plan_turn(["wontfix"], 3), 3) == "closed (wontfix)",
+        "wontfix status must report the close",
+        failed,
+    )
+
     if failed:
         print(f"\n{len(failed)} loop test(s) failed.", file=sys.stderr)
         return 1
