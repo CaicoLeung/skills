@@ -22,3 +22,5 @@ jobs:
         run: python3 scripts/validate-skills.py
       - name: Check skills index is up to date
         run: python3 scripts/index-skills.py --check
+      - name: Run routing dispatcher tests (ADR-0008)
+        run: python3 scripts/test_routing.py
