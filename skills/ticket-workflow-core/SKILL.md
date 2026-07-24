@@ -1,7 +1,7 @@
 ---
 name: ticket-workflow-core
 description: "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision."
-version: 0.4.0
+version: 0.5.0
 requires:
   - project
   - tickets
@@ -111,21 +111,20 @@ REASONING_DEPTH mapping:
 
 ### GATE
 
-Enforce close-out gates before task completion (e.g., `/code-review` must pass). Convergent verdict protocol: gate fails until reviewer emits explicit pass.
+Enforce close-out gates before task completion (e.g., `/code-review` must pass). Derived verdict protocol (ADR-0007): verdict is computed from severity-tagged findings, never self-declared.
 
 **Abstract shape:**
 ```
 GATE task:
   type: "review"
   reviewer: "secondary_model"
-  verdict_schema:
-    format: "VERDICT pass|fail"
-    issues_format: "[file:line]: <severity>: <summary>"
-    severity_levels: ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-  convergence_rule:
-    pass: "no CRITICAL or HIGH issues"
-    fail: "any CRITICAL or HIGH issue"
-    loop: "fix → re-review until VERDICT pass"
+  verdict_protocol: "derived"
+  findings_format: "[file:line]: <severity>: <summary>"
+  severity_levels: ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+  explicit_ok_format: "file: OK"
+  verdict_rule:
+    pass: "no CRITICAL or HIGH findings AND every changed file has a finding or explicit OK"
+    fail: "any CRITICAL or HIGH finding OR any changed file lacks coverage"
   action:
     - type: "block_completion"
       until: "verdict_pass"
@@ -133,9 +132,11 @@ GATE task:
       policy: "auto" | "wait-for-human"
 ```
 
-**Verdict protocol:** Reviewer MUST emit final line `VERDICT pass` or `VERDICT fail`. Preceding lines list issues as `[file:line]: <severity>: <summary>`. Gate is NOT satisfied by review execution alone — only by explicit `VERDICT pass`. Non-convergence (no verdict, or `VERDICT fail` with CRITICAL/HIGH) is a failure that surfaces, not a silent stall.
+**Derived verdict protocol (ADR-0007):** Reviewer emits **only structured findings** across the two `/code-review` axes (Standards, Spec). Format: `[file:line]: SEVERITY: summary` where `SEVERITY ∈ {CRITICAL, HIGH, MEDIUM, LOW}`. Explicit OK: `file: OK`. No `VERDICT pass|fail` line — the verdict is computed by a pure function (`derive_verdict(findings_text, changed_files)`).
 
-**Runtime mapping:** Adapters encode the verdict schema and convergence rule in the prompt contract that invokes the secondary-model reviewer. The primary agent loops fix → re-review until `VERDICT pass`.
+**Verdict rule:** `pass = (no CRITICAL and no HIGH) AND (every changed file has a finding or explicit OK)`. CRITICAL/HIGH findings block. MEDIUM/LOW are non-blocking warnings. Coverage floor: a changed file with neither finding nor OK is a gap that fails.
+
+**Runtime mapping:** Adapters invoke the secondary-model reviewer with a fixed prompt template. Findings are transported (e.g., PR comment) and evaluated by `verdict.py` or equivalent. The CI check enforces the computed verdict. Reviewer independence ensures no agent can forge its own verdict (ADR-0007).
 
 ---
 
@@ -272,5 +273,6 @@ This core is intentionally zero/low-dependency and provider-neutral. No runtime-
 
 ## Version Changes
 
+0.5.0: GATE verdict protocol changed from self-declared to derived (ADR-0007). Removed `VERDICT pass|fail` schema. Verdict is computed by pure function from severity-tagged findings: `pass = (no CRITICAL/HIGH) AND (every changed file has coverage)`. MEDIUM/LOW are non-blocking warnings.
 0.4.0: DEPENDS_ON clarified — completion semantics now explicitly distinguish merged-and-gated (default) from agent-finished. Two-state completion documented: supervisor observes merged-and-gated, posts verified signal; dependents unblock on verified work, not agent-finished. Resolves gap #2.
 0.3.0: Added SUPERVISE primitive — supervisor observes gate/merge state, declares completion only on merged-and-gated, escalates stuck gates within bounded window.
