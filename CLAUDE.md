@@ -12,6 +12,10 @@ Issues live as GitHub issues in CaicoLeung/skills, driven by the `gh` CLI. See `
 
 Triage uses the five default labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 
+### Ticket types
+
+Routing dispatches on ticket type (`research` / `prototype` / `grilling` / `task`) after the readiness gate — orthogonal to triage state. Pure dispatcher: `python3 scripts/routing.py`; tests: `python3 scripts/test_routing.py`. See `docs/agents/ticket-types.md`.
+
 ### Domain docs
 
 Single-context — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
