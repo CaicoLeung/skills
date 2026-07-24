@@ -1,7 +1,7 @@
 ---
 name: loop-engineering
-description: "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch) and invokes external doing-skills as leaves (ADR-0008)."
-version: 0.1.0
+description: "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch) and the close-out loop (review → derived verdict → fix → merge → close) and invokes external doing-skills as leaves (ADR-0008)."
+version: 0.2.0
 requires:
   - project
   - tickets
@@ -26,10 +26,12 @@ It documents the loop's shape; the executable spine lives in
 `/implement`, `/research`, …) **stay external** — the loop *invokes* them; it
 never carries them (ADR-0001 selective-fork principle).
 
-> **Status.** This is the *routing half* (T5a, issue #28): readiness gate +
-> type dispatch + the implement turn that opens a PR carrying `Fixes #N`. The
-> close-out half — independent review → derived verdict → fix loop → merge →
-> close — is T5b (issue #29) and is stubbed below, not yet wired.
+> **Status.** Routing half (T5a, issue #28) **and** close-out half (T5b,
+> issue #29) are wired: readiness gate + type dispatch open a PR carrying
+> `Fixes #N`, then the close-out loop drives independent review → derived
+> verdict → fix → merge → close. The pure close-out planner is
+> [`scripts/closeout.py`](../../scripts/closeout.py); the I/O driver lives in
+> [`scripts/loop.py`](../../scripts/loop.py) (`run_closeout_*`).
 
 ## The loop drives the agent; agents are leaves
 
@@ -114,20 +116,40 @@ For a `ready-for-agent` + `task` ticket, the loop:
 2. Invokes `/implement` (`paseo run --detach`) in a worktree off the base
    branch with a system-authored prompt that instructs the agent to use that
    body verbatim.
-3. **(this slice ends here — PR opened.)** The close-out half below is T5b.
+3. Opens a PR whose body carries `Fixes #N` (auto-closes the issue on merge).
 
-### Close-out half (T5b, issue #29 — stubbed, not yet wired)
+### Close-out half (T5b, issue #29)
 
-> 4. Invoke the **independent** reviewer (loop-invoked, secondary model on a
->    different provider, separate worktree, diff + spec only) under a fixed
->    system-authored prompt (ADR-0007).
-> 5. Hand the reviewer's structured findings to the **same implementer**
->    verbatim (no "resolve all issues" prose); re-review until the derived
->    verdict passes or the **3-round cap** hits (`STUCK_REVIEW`: chat + issue
->    comment, PR unmerged, no auto-close).
-> 6. On pass, the **loop** (never the implementer) enables auto-merge; GitHub
->    merges when both `validate-skills` and `review-verdict` are green.
-> 7. The issue closes via `Fixes #N` plus a loop resolution comment.
+Once the PR is open, the close-out loop
+([`scripts/closeout.py`](../../scripts/closeout.py) planner +
+[`scripts/loop.py`](../../scripts/loop.py) driver) drives review → verdict →
+fix → merge → close. The decision is a pure function,
+[`closeout.plan_closeout(verdict, round)`](../../scripts/closeout.py):
+
+4. **Invoke the independent reviewer** (loop-invoked, never the implementer):
+   secondary model on a **different provider**, separate worktree, **diff +
+   spec only** under the fixed
+   [`review-prompt.md`](../ticket-workflow-core/review-prompt.md) (ADR-0007 §2 —
+   five independence axes).
+5. **Derive the verdict** from the reviewer's sha-tagged findings
+   ([`scripts/verdict.py`](../../scripts/verdict.py), ADR-0007) — computed,
+   never declared. `pass = no CRITICAL/HIGH AND every changed file has a
+   finding or OK`.
+6. **Fix loop.** On fail, hand the findings to the **same implementer**
+   *verbatim* ([`closeout.fix_prompt`](../../scripts/closeout.py) — no
+   "resolve all issues" prose); it pushes; the loop re-reviews. A finding is
+   "resolved" only when it disappears from the **next** review — never
+   self-declared. The loop re-derives the verdict each round, so a finding
+   that was not actually fixed reappears and the verdict stays fail.
+7. **Cap.** After [`closeout.MAX_REVIEW_ROUNDS`](../../scripts/closeout.py) (3)
+   rounds without a pass, the loop escalates **`STUCK_REVIEW`** (chat room + a
+   `gh issue comment`), leaves the PR **unmerged**, and does **not**
+   auto-close. It never silently passes.
+8. **Merge + dual close.** On pass, the **loop** (never the implementer)
+   enables GitHub auto-merge (`gh pr merge --auto`); GitHub merges when both
+   `validate-skills` and `review-verdict` are green. The issue closes via
+   `Fixes #N`, and the loop posts a
+   [`closeout.resolution_comment`](../../scripts/closeout.py) (dual close).
 
 ## Scope and escalation
 
@@ -142,19 +164,30 @@ stop-and-leave).
 ## Running the driver
 
 ```bash
-# Plan a turn without side effects (CI-safe):
+# Routing half — plan a turn without side effects (CI-safe):
 python3 scripts/loop.py 28 --dry-run
 
-# Drive one routing turn for a claimed ticket:
-python3 scripts/loop.py 28
+# Close-out half — simulate a full trajectory (no agents, no network):
+python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass --dry-run
+python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail --dry-run  # → STUCK_REVIEW
+
+# Close-out half — drive one live round for a PR (reviewer on a 2nd provider):
+python3 scripts/loop.py closeout 29 --pr 99 \
+  --secondary-provider openai --secondary-model gpt-4o \
+  --reviewer-login "$REVIEWER_LOGIN" --dry-run
 ```
 
-The turn planner is pure and unit-tested:
+The planners are pure and unit-tested:
 
 ```bash
-python3 scripts/test_loop.py        # turn-planning (this slice)
 python3 scripts/test_routing.py     # two-axis router
+python3 scripts/test_loop.py        # routing turn-planning (T5a)
+python3 scripts/test_closeout.py    # close-out planner (T5b)
 ```
+
+See [`docs/agents/closeout.md`](../../docs/agents/closeout.md) for the
+end-to-end demo procedure (claim → triage → implement → review → merge →
+close).
 
 ## Inputs
 
@@ -182,10 +215,22 @@ The loop must:
 - enforce the readiness gate — implement unreachable from a triage status;
 - dispatch by ticket type once readiness clears;
 - for `task`, open a PR whose body carries `Fixes #N`;
-- keep doing-skills external (invoked, never carried);
-- escalate, not silently pass, when the fix loop exhausts its cap (T5b).
+- hand review findings to the fixer **verbatim**; "resolved" = disappears from the next review;
+- escalate `STUCK_REVIEW` at the 3-round cap — never silently pass;
+- enable auto-merge only on a passing derived verdict, and only the loop (never the implementer) merges;
+- dual-close: `Fixes #N` auto-close + a loop resolution comment;
+- keep doing-skills external (invoked, never carried).
 
 ## Version Changes
+
+0.2.0: Close-out half wired (T5b, issue #29). Pure planner
+`scripts/closeout.py` (`plan_closeout`, `fix_prompt`, `resolution_comment`,
+`stuck_message`, `auto_merge_command`, `closeout_commands`; 3-round cap →
+`STUCK_REVIEW`; loop-only auto-merge on PASS; dual close). Driver stages in
+`scripts/loop.py` (`run_closeout_round`, `run_closeout_trajectory`) invoke the
+independent reviewer, hand findings verbatim to the same implementer,
+re-derive the verdict each round, and merge + close. Tests in
+`scripts/test_closeout.py`; demo in `docs/agents/closeout.md`.
 
 0.1.0: Routing-half skeleton (T5a, issue #28). Documents the two-axis router,
 per-type rituals, and the scripted-vs-judgment boundary. Executable spine in

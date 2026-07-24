@@ -30,3 +30,7 @@ jobs:
         run: python3 scripts/test_loop.py
       - name: Run review-verdict selection tests (ADR-0007 enforcement)
         run: python3 scripts/test_review_verdict.py
+      - name: Run close-out loop planner tests (ADR-0008 §5 / T5b)
+        run: python3 scripts/test_closeout.py
+      - name: Run close-out planner tests (ADR-0008 §5 / T5b)
+        run: python3 scripts/test_closeout.py
