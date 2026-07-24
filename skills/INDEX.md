@@ -4,5 +4,6 @@
 
 | Skill | Version | Description | Requires | Produces |
 | --- | --- | --- | --- | --- |
+| [`loop-engineering`](skills/loop-engineering/SKILL.md) | `0.1.0` | Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch) and invokes external doing-skills as leaves (ADR-0008). | project, tickets | turns, prs |
 | [`ticket-workflow-core`](skills/ticket-workflow-core/SKILL.md) | `0.5.0` | Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision. | project, tickets, epics | workflow-plan, task-specifications |
 | [`tickets-to-paseo`](skills/tickets-to-paseo/SKILL.md) | `0.5.1` | Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor). | project, tickets, epics | workflow, paseo-agents |
