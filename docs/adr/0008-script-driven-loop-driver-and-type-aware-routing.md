@@ -109,3 +109,11 @@ the ADR-0006 pattern. It does not auto-close on stuck (only `wontfix` /
 - The `ticket-workflow-core` `GATE` change is recorded in ADR-0007.
 - ADR-0006 supervisor semantics fold into the loop driver (no separate
   supervisor agent).
+- T5b (issue #29) — the close-out half: `scripts/closeout.py` (pure planner —
+  `plan_closeout`, `VerdictState`, `CloseoutDecision`, `fix_prompt`,
+  `resolution_comment`, `stuck_message`, `closeout_commands`) +
+  `scripts/test_closeout.py`; the `run_closeout_round` / `run_closeout_trajectory`
+  driver + `closeout` CLI subcommand in `scripts/loop.py`; the demo in
+  `docs/agents/closeout.md`. The 3-round STUCK_REVIEW cap, the verbatim
+  findings handoff, loop-only auto-merge, and dual close (`Fixes #N` +
+  resolution comment) are all realized here.

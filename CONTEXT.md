@@ -61,6 +61,18 @@ synonyms. Architecture decisions live in [`docs/adr/`](docs/adr/).
   `/code-review`, the CI check, or a human approving review depending on
   context)
 
+- **Review round / fix loop** — one iteration of the close-out cycle for a
+  `task` PR: an independent review (T4) of the current head, followed by the
+  derived verdict (T1/T3). On fail, the loop hands the findings to the same
+  implementer **verbatim** and re-reviews; a finding is "resolved" only when
+  it disappears from the *next* review, never self-declared. The loop is
+  bounded by a 3-round cap (`MAX_REVIEW_ROUNDS`): a third non-pass escalates
+  `STUCK_REVIEW` (chat + issue comment, PR unmerged, no auto-close) rather
+  than looping forever. The loop (never the implementer) enables auto-merge
+  only on a pass, and closes via the PR's `Fixes #N` trailer plus a resolution
+  comment. _Avoid_: "iteration" (too generic), "retry loop" (implies blind
+  retry, not verdict-driven).
+
 - **Quota failover** — switching execution to the secondary provider when the
   primary's quota is exhausted, and back again when a quota probe confirms
   restoration. Driven off **real quota signals**, never a fixed calendar

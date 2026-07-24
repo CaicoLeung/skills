@@ -6,8 +6,10 @@ Exits non-zero on any failure.
 
 Scope (this slice): the loop's *routing half* — the readiness gate and type
 dispatch that decide which turn runs, and the implement turn's PR-body
-contract. The close-out half (review → verdict → fix → merge → close) is T5b
-(issue #29) and is not exercised here.
+(issue #29); its network-free enrichment path is covered below — the
+provider/model + verbatim handoff in :func:`loop.closeout_decision_commands`
+for FIX, and the loop-owned PASS commands. The REVIEW enrichment needs ``gh``
+for the live diff, so it stays on ``--dry-run``.
 
 Behavior, not plumbing: no ``gh``, no ``paseo run``. The pure turn-planning
 function (:func:`loop.plan_turn`) is the testable seam; the I/O driver that
@@ -224,6 +226,64 @@ def main() -> int:
     _check(
         loop.turn_status(loop.plan_turn(["wontfix"], 3), 3) == "closed (wontfix)",
         "wontfix status must report the close",
+        failed,
+    )
+
+    # --- Close-out driver enrichment (T5b): provider/model + verbatim handoff --
+    # The live closeout_decision_commands refines the pure planner's placeholder
+    # commands. FIX runs on the PRIMARY provider with the verbatim findings; PASS
+    # emits loop-owned gh commands. REVIEW needs gh for the live diff (covered by
+    # --dry-run, not here). Network-free: no gh, no paseo.
+    print("close-out driver enrichment (FIX primary, PASS loop-owned):")
+    import closeout
+
+    cfg_fix = loop.DriverConfig(
+        repo="CaicoLeung/skills", provider="anthropic", model="claude-x",
+    )
+    FINDINGS = "### Standards\n[s/x.py:9]: HIGH: null deref\n"
+    fix_dec = closeout.plan_closeout(
+        closeout.VerdictState(closeout.VERDICT_FAIL, FINDINGS, 1, 0), round=1
+    )
+    fix_cmds = loop.closeout_decision_commands(
+        cfg_fix, fix_dec, 29, 42, head_sha="deadbeef"
+    )
+    fix_run = [c for c in fix_cmds if c[0] == "paseo"][0]
+    _check(
+        "--provider" in fix_run and "anthropic" in fix_run,
+        "FIX enrichment runs on cfg.provider",
+        failed,
+    )
+    _check(
+        "--model" in fix_run and "claude-x" in fix_run,
+        "FIX enrichment runs on cfg.model (not the planner default)",
+        failed,
+    )
+    _check(
+        FINDINGS in fix_run[-1],
+        "FIX enrichment prompt carries the findings verbatim",
+        failed,
+    )
+    _check(
+        not any(c[:3] == ["gh", "pr", "merge"] for c in fix_cmds),
+        "FIX enrichment must not emit a merge (implementer never merges)",
+        failed,
+    )
+
+    cfg_pass = loop.DriverConfig(repo="CaicoLeung/skills")
+    pass_dec = closeout.plan_closeout(
+        closeout.VerdictState(closeout.VERDICT_PASS, "", 0, 0), round=1
+    )
+    pass_cmds = loop.closeout_decision_commands(
+        cfg_pass, pass_dec, 29, 42, head_sha="deadbeef"
+    )
+    _check(
+        any(c[:3] == ["gh", "pr", "merge"] and "--auto" in c for c in pass_cmds),
+        "PASS enrichment emits the loop-owned auto-merge",
+        failed,
+    )
+    _check(
+        any(c[:3] == ["gh", "issue", "comment"] for c in pass_cmds),
+        "PASS enrichment emits the dual-close resolution comment",
         failed,
     )
 
