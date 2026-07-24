@@ -13,11 +13,15 @@ This is a pure function — no agent, network, or GitHub calls.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+
+
+# Regex for explicit OK lines: 'file: OK' with optional whitespace
+OK_RE = re.compile(r"^(.+?)\s*:\s*OK\s*$")
 
 
 class Severity(Enum):
@@ -35,6 +39,14 @@ class Severity(Enum):
             return cls[value.upper()]
         except KeyError:
             return None
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize file path for comparison.
+
+    Strips leading './' and normalizes path separators.
+    """
+    return os.path.normpath(path).lstrip("./\\")
 
 
 @dataclass(frozen=True)
@@ -60,7 +72,7 @@ class Finding:
             return None
 
         return cls(
-            file=file_path,
+            file=_normalize_path(file_path),
             line=int(line_str) if line_str else None,
             severity=severity,
             summary=summary.strip(),
@@ -74,8 +86,8 @@ class VerdictResult:
     pass_verdict: bool
     findings: list[Finding]
     changed_files: set[str]
-    coverage_gaps: list[str]  # Files with no findings or explicit OK
-    blocking_issues: list[Finding]  # CRITICAL or HIGH findings
+    coverage_gaps: tuple[str, ...]  # Files with no findings or explicit OK
+    blocking_issues: tuple[Finding, ...]  # CRITICAL or HIGH findings
 
     def to_dict(self) -> dict:
         """Convert to JSON-serializable dict."""
@@ -83,7 +95,7 @@ class VerdictResult:
             "verdict": "pass" if self.pass_verdict else "fail",
             "findings_count": len(self.findings),
             "blocking_count": len(self.blocking_issues),
-            "coverage_gaps": self.coverage_gaps,
+            "coverage_gaps": list(self.coverage_gaps),
             "blocking_files": [f.file for f in self.blocking_issues],
         }
 
@@ -109,7 +121,6 @@ def derive_verdict(
     """
     findings: list[Finding] = []
     explicitly_ok_files: set[str] = set()
-    coverage_gaps: list[str] = []
 
     # Parse findings
     for line in findings_text.strip().splitlines():
@@ -117,26 +128,29 @@ def derive_verdict(
         if not line:
             continue
 
-        # Check for explicit OK: 'file: OK' or 'path: OK'
-        if line.endswith(": OK"):
-            ok_file = line[:-4].strip()
-            explicitly_ok_files.add(ok_file)
-            continue
-
-        # Try to parse as a finding
+        # Try to parse as a finding first (more specific pattern)
         finding = Finding.from_string(line)
         if finding:
             findings.append(finding)
+            continue
+
+        # Check for explicit OK: 'file: OK' (robust to whitespace)
+        # Only treat as OK if finding parsing failed
+        ok_match = OK_RE.match(line)
+        if ok_match:
+            ok_file = _normalize_path(ok_match.group(1))
+            explicitly_ok_files.add(ok_file)
+            continue
 
     # Check for blocking issues (CRITICAL or HIGH)
-    blocking_issues = [f for f in findings if f.severity in (Severity.CRITICAL, Severity.HIGH)]
+    blocking_issues = tuple(f for f in findings if f.severity in (Severity.CRITICAL, Severity.HIGH))
 
     # Check for coverage gaps (changed file with no finding or OK)
-    changed_file_set = set(changed_files)
+    changed_file_set = {_normalize_path(f) for f in changed_files}
     files_with_findings = {f.file for f in findings}
     files_with_coverage = files_with_findings | explicitly_ok_files
 
-    coverage_gaps = sorted(changed_file_set - files_with_coverage)
+    coverage_gaps = tuple(sorted(changed_file_set - files_with_coverage))
 
     # Derive verdict
     pass_verdict = len(blocking_issues) == 0 and len(coverage_gaps) == 0
@@ -176,10 +190,12 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    findings_text = args.findings_file.read()
+    with args.findings_file:
+        findings_text = args.findings_file.read()
 
     if args.changed_files_file:
-        changed_files = [f.strip() for f in args.changed_files_file if f.strip()]
+        with args.changed_files_file:
+            changed_files = [f.strip() for f in args.changed_files_file if f.strip()]
     else:
         changed_files = args.changed_files
 

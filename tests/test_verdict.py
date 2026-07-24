@@ -298,3 +298,122 @@ def test_whitespace_handling_in_findings():
 
     assert len(result.findings) == 2
     assert result.pass_verdict is True
+
+
+@pytest.mark.unit
+def test_explicit_ok_with_double_space():
+    """Explicit OK with double space after colon is recognized."""
+    findings_text = "src/main.py:  OK"  # Double space
+    changed_files = ["src/main.py"]
+
+    result = derive_verdict(findings_text, changed_files)
+
+    assert result.pass_verdict is True
+    assert len(result.coverage_gaps) == 0
+
+
+@pytest.mark.unit
+def test_finding_with_ok_suffix_not_misclassified():
+    """Finding summary ending with ': OK' is not treated as explicit OK."""
+    findings_text = "src/foo.py:10: LOW: checklist item: OK"
+    changed_files = ["src/foo.py"]
+
+    result = derive_verdict(findings_text, changed_files)
+
+    # Should be parsed as a finding, not as explicit OK
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == Severity.LOW
+    assert result.pass_verdict is True  # LOW is non-blocking
+
+
+@pytest.mark.unit
+def test_path_normalization_with_dot_slash():
+    """Paths with leading ./ are normalized for comparison."""
+    findings_text = "src/main.py: OK"
+    changed_files = ["./src/main.py"]
+
+    result = derive_verdict(findings_text, changed_files)
+
+    assert result.pass_verdict is True
+    assert len(result.coverage_gaps) == 0
+
+
+@pytest.mark.unit
+def test_path_normalization_mixed_formats():
+    """Mixed path formats are normalized correctly."""
+    findings_text = """
+    ./src/main.py: OK
+    src/utils.py:15: LOW: Minor issue.
+    """
+    changed_files = ["src/main.py", "./src/utils.py"]
+
+    result = derive_verdict(findings_text, changed_files)
+
+    assert result.pass_verdict is True
+    assert len(result.coverage_gaps) == 0
+
+
+@pytest.mark.integration
+def test_cli_pass_case(tmp_path):
+    """CLI returns exit code 0 for pass verdict."""
+    import subprocess
+    import sys
+
+    findings_file = tmp_path / "findings.txt"
+    findings_file.write_text("src/main.py: OK\nsrc/utils.py: OK")
+
+    result = subprocess.run(
+        [sys.executable, "scripts/verdict.py", str(findings_file), "src/main.py", "src/utils.py"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert '"verdict": "pass"' in result.stdout
+
+
+@pytest.mark.integration
+def test_cli_fail_case(tmp_path):
+    """CLI returns exit code 1 for fail verdict."""
+    import subprocess
+    import sys
+
+    findings_file = tmp_path / "findings.txt"
+    findings_file.write_text("src/main.py:42: CRITICAL: Security issue")
+
+    result = subprocess.run(
+        [sys.executable, "scripts/verdict.py", str(findings_file), "src/main.py", "src/utils.py"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert '"verdict": "fail"' in result.stdout
+
+
+@pytest.mark.integration
+def test_cli_with_changed_files_file(tmp_path):
+    """CLI --changed-files-file option works correctly."""
+    import subprocess
+    import sys
+
+    findings_file = tmp_path / "findings.txt"
+    findings_file.write_text("src/main.py: OK")
+
+    changed_files_file = tmp_path / "changed.txt"
+    changed_files_file.write_text("src/main.py\nsrc/utils.py\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/verdict.py",
+            str(findings_file),
+            "--changed-files-file",
+            str(changed_files_file),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1  # src/utils.py has no coverage
+    assert '"coverage_gaps"' in result.stdout

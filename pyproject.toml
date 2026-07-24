@@ -4,6 +4,7 @@ markers = [
     "integration: Integration tests (slower, may use external services)",
 ]
 testpaths = ["tests"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
