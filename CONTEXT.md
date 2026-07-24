@@ -6,6 +6,14 @@ synonyms. Architecture decisions live in [`docs/adr/`](docs/adr/).
 
 ## Glossary
 
+- **Loop Engineering** — the practice of designing the *system* that drives an
+  agent through a goal-bounded, verified cycle — implement, review, fix, merge,
+  close — rather than prompting it turn-by-turn. Routines are mechanical
+  operations encoded as scripted steps with a verification gate at each stage,
+  not free-form natural-language instructions handed off in prose.
+  _Avoid_: "automation", "workflow" (too generic — they elide the
+  agent-in-the-loop and the per-stage verification that distinguishes a loop
+  from a batch job).
 - **Paseo daemon** — the local supervisor process that owns agent lifecycle,
   state, and the WebSocket the desktop/mobile clients consume. Agents are
   asynchronous (10–30+ minutes); do not poll, rely on completion notifications.
@@ -30,12 +38,25 @@ synonyms. Architecture decisions live in [`docs/adr/`](docs/adr/).
   dependencies are preserved by declaring these edges up-front, not by delaying
   agent creation.
 
-- **Close-out gate** — the conditions that must all hold before a ticket's PR may
-  merge: the AI `/code-review` (run by the secondary model) passed, **and** the
-  required CI status check is green. Both are universal — never optional, never
-  bypassed. A human approving review is the only optional component, toggled per
-  the merge setting; it stacks on top of the AI and CI gates, never replaces
-  them.
+- **Ticket type** — the *kind of work* a ticket represents, set as a label at
+  creation and read by the loop's dispatcher to route the ticket to its skill.
+  Four values, mirroring `wayfinder`'s vocabulary: `research` (AFK — surface a
+  fact), `prototype` (HITL — raise fidelity with an artifact), `grilling` (HITL
+  — resolve a decision by interview), `task` (code-delivery, AFK — build and
+  merge). Orthogonal to the triage readiness *state*: the loop gates on state,
+  then dispatches on type.
+  _Avoid_: "category" (reserved for bug/enhancement), "kind" (too vague).
+
+- **Close-out gate** — the conditions that must all hold before a code-delivery
+  ticket's PR may merge: the `/code-review` verdict is **pass** —
+  *script-derived* from the reviewer's severity-tagged findings (no
+  CRITICAL/HIGH + per-file coverage floor), never a self-declared token —
+  **and** the required CI status checks (`validate-skills`, `review-verdict`)
+  are green. Applies to code-delivery (`task`) tickets only; `research` /
+  `prototype` / `grilling` tickets resolve a decision and close without a PR.
+  Universal for code delivery — never optional, never bypassed. A human
+  approving review is the only optional component, toggled per the merge
+  setting; it stacks on the AI and CI gates, never replaces them.
   _Avoid_: quality gate (too vague), review (overloaded — means the AI
   `/code-review`, the CI check, or a human approving review depending on
   context)
