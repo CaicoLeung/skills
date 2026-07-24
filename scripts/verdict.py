@@ -13,7 +13,7 @@ This is a pure function — no agent, network, or GitHub calls.
 
 from __future__ import annotations
 
-import os
+import posixpath
 import re
 import sys
 from dataclasses import dataclass
@@ -42,11 +42,15 @@ class Severity(Enum):
 
 
 def _normalize_path(path: str) -> str:
-    """Normalize file path for comparison.
+    """Normalize a file path for comparison.
 
-    Strips leading './' and normalizes path separators.
+    Backslash separators are folded to POSIX '/' and '.'/'..' segments are
+    collapsed. A leading './' is dropped, but the leading dot of dotfile or
+    dot-directory names (e.g. '.github/workflows/x.yml', '.env') is preserved
+    — the previous ``lstrip("./\\")`` stripped a *character set* and corrupted
+    such paths in coverage output.
     """
-    return os.path.normpath(path).lstrip("./\\")
+    return posixpath.normpath(path.replace("\\", "/"))
 
 
 @dataclass(frozen=True)
@@ -60,43 +64,72 @@ class Finding:
 
     @classmethod
     def from_string(cls, line: str) -> Finding | None:
-        """Parse finding from '[file:line]: SEVERITY: summary' format."""
-        pattern = r"^([^:]+):(?:(\d+):)?\s*([A-Z]+):\s*(.+)$"
+        """Parse a finding line into a :class:`Finding`.
+
+        Accepts both the plain and the bracketed form documented in ADR-0007
+        and the GATE primitive::
+
+            file:line: SEVERITY: summary
+            [file:line]: SEVERITY: summary
+
+        Returns ``None`` for anything that is not a finding (including an
+        explicit ``file: OK``), so the caller can fall through to OK parsing.
+        """
+        pattern = (
+            r"^\[?(?P<file>[^:\[\]]+)"
+            r"(?::(?P<line>\d+))?"
+            r"\]?:\s*(?P<severity>[A-Z]+):\s*(?P<summary>.+)$"
+        )
         match = re.match(pattern, line.strip())
         if not match:
             return None
 
-        file_path, line_str, severity_str, summary = match.groups()
-        severity = Severity.from_string(severity_str)
+        severity = Severity.from_string(match.group("severity"))
         if not severity:
             return None
 
         return cls(
-            file=_normalize_path(file_path),
-            line=int(line_str) if line_str else None,
+            file=_normalize_path(match.group("file")),
+            line=int(match.group("line")) if match.group("line") else None,
             severity=severity,
-            summary=summary.strip(),
+            summary=match.group("summary").strip(),
         )
+
+    def to_dict(self) -> dict:
+        """JSON-serializable view of this finding."""
+        return {
+            "file": self.file,
+            "line": self.line,
+            "severity": self.severity.value,
+            "summary": self.summary,
+        }
 
 
 @dataclass(frozen=True)
 class VerdictResult:
     """Verdict computation result."""
 
-    pass_verdict: bool
+    passed: bool
     findings: list[Finding]
     changed_files: set[str]
     coverage_gaps: tuple[str, ...]  # Files with no findings or explicit OK
     blocking_issues: tuple[Finding, ...]  # CRITICAL or HIGH findings
 
     def to_dict(self) -> dict:
-        """Convert to JSON-serializable dict."""
+        """Convert to a JSON-serializable dict.
+
+        Surfaces every finding (with severity/line/summary), the blocking
+        subset, coverage gaps, and the normalized changed-file set, so the CI
+        check can report evidence rather than only counts.
+        """
         return {
-            "verdict": "pass" if self.pass_verdict else "fail",
+            "verdict": "pass" if self.passed else "fail",
+            "findings": [f.to_dict() for f in self.findings],
             "findings_count": len(self.findings),
+            "blocking_issues": [f.to_dict() for f in self.blocking_issues],
             "blocking_count": len(self.blocking_issues),
             "coverage_gaps": list(self.coverage_gaps),
-            "blocking_files": [f.file for f in self.blocking_issues],
+            "changed_files": sorted(self.changed_files),
         }
 
 
@@ -153,10 +186,10 @@ def derive_verdict(
     coverage_gaps = tuple(sorted(changed_file_set - files_with_coverage))
 
     # Derive verdict
-    pass_verdict = len(blocking_issues) == 0 and len(coverage_gaps) == 0
+    passed = len(blocking_issues) == 0 and len(coverage_gaps) == 0
 
     return VerdictResult(
-        pass_verdict=pass_verdict,
+        passed=passed,
         findings=findings,
         changed_files=changed_file_set,
         coverage_gaps=coverage_gaps,
@@ -203,7 +236,7 @@ def main() -> int:
 
     print(json.dumps(result.to_dict(), indent=2))
 
-    return 0 if result.pass_verdict else 1
+    return 0 if result.passed else 1
 
 
 if __name__ == "__main__":

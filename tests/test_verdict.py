@@ -17,7 +17,7 @@ def test_clean_pass_all_files_covered_with_ok():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.blocking_issues) == 0
     assert len(result.coverage_gaps) == 0
     assert result.to_dict()["verdict"] == "pass"
@@ -35,7 +35,7 @@ def test_clean_pass_all_files_covered_with_findings():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.blocking_issues) == 0
     assert len(result.coverage_gaps) == 0
 
@@ -52,7 +52,7 @@ def test_clean_pass_mixed_ok_and_findings():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.blocking_issues) == 0
     assert len(result.coverage_gaps) == 0
 
@@ -68,7 +68,7 @@ def test_fail_on_critical_finding():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.blocking_issues) == 1
     assert result.blocking_issues[0].severity == Severity.CRITICAL
     assert "SQL injection" in result.blocking_issues[0].summary
@@ -85,7 +85,7 @@ def test_fail_on_high_finding():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.blocking_issues) == 1
     assert result.blocking_issues[0].severity == Severity.HIGH
 
@@ -102,7 +102,7 @@ def test_fail_on_multiple_blocking_issues():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.blocking_issues) == 3
     severity_summaries = {f.severity for f in result.blocking_issues}
     assert Severity.CRITICAL in severity_summaries
@@ -121,7 +121,7 @@ def test_medium_and_low_are_non_blocking():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.blocking_issues) == 0
     assert len(result.findings) == 3  # All findings recorded
 
@@ -136,7 +136,7 @@ def test_fail_on_coverage_gap_no_finding_or_ok():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.coverage_gaps) == 1
     assert "src/utils.py" in result.coverage_gaps
 
@@ -151,7 +151,7 @@ def test_fail_on_multiple_coverage_gaps():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.coverage_gaps) == 3
     assert "src/utils.py" in result.coverage_gaps
     assert "src/auth.py" in result.coverage_gaps
@@ -169,7 +169,7 @@ def test_fail_on_blocking_and_coverage_gap():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.blocking_issues) == 1
     assert len(result.coverage_gaps) == 1
 
@@ -182,7 +182,7 @@ def test_empty_findings_all_files_uncovered():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.coverage_gaps) == 2
 
 
@@ -194,7 +194,7 @@ def test_empty_findings_no_changed_files():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.coverage_gaps) == 0
 
 
@@ -215,7 +215,7 @@ def test_aggregate_both_review_axes():
     result = derive_verdict(findings_text, changed_files)
 
     # CRITICAL + HIGH across both axes should FAIL
-    assert result.pass_verdict is False
+    assert result.passed is False
     assert len(result.blocking_issues) == 2
     assert len(result.findings) == 4
 
@@ -281,7 +281,7 @@ def test_explicit_ok_with_path_separator():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.coverage_gaps) == 0
 
 
@@ -297,7 +297,7 @@ def test_whitespace_handling_in_findings():
     result = derive_verdict(findings_text, changed_files)
 
     assert len(result.findings) == 2
-    assert result.pass_verdict is True
+    assert result.passed is True
 
 
 @pytest.mark.unit
@@ -308,7 +308,7 @@ def test_explicit_ok_with_double_space():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.coverage_gaps) == 0
 
 
@@ -323,7 +323,7 @@ def test_finding_with_ok_suffix_not_misclassified():
     # Should be parsed as a finding, not as explicit OK
     assert len(result.findings) == 1
     assert result.findings[0].severity == Severity.LOW
-    assert result.pass_verdict is True  # LOW is non-blocking
+    assert result.passed is True  # LOW is non-blocking
 
 
 @pytest.mark.unit
@@ -334,7 +334,7 @@ def test_path_normalization_with_dot_slash():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.coverage_gaps) == 0
 
 
@@ -349,7 +349,7 @@ def test_path_normalization_mixed_formats():
 
     result = derive_verdict(findings_text, changed_files)
 
-    assert result.pass_verdict is True
+    assert result.passed is True
     assert len(result.coverage_gaps) == 0
 
 
@@ -417,3 +417,47 @@ def test_cli_with_changed_files_file(tmp_path):
 
     assert result.returncode == 1  # src/utils.py has no coverage
     assert '"coverage_gaps"' in result.stdout
+
+
+@pytest.mark.unit
+def test_bracketed_finding_format_parses():
+    """ADR-0007 documents findings as '[file:line]: SEVERITY: summary'.
+
+    The literal bracketed form must parse (not silently become a coverage gap).
+    """
+    findings_text = "[src/main.py:42]: HIGH: bracketed-format regression"
+    result = derive_verdict(findings_text, ["src/main.py"])
+
+    assert result.passed is False
+    assert len(result.blocking_issues) == 1
+    assert result.blocking_issues[0].severity == Severity.HIGH
+    assert result.blocking_issues[0].line == 42
+
+
+@pytest.mark.unit
+def test_dotfile_paths_preserved_in_coverage():
+    """A leading dot in a dotfile/dotdir name is not stripped (_normalize_path)."""
+    findings_text = ".github/workflows/ci.yml: OK"
+    result = derive_verdict(findings_text, [".github/workflows/ci.yml", ".env"])
+
+    assert result.passed is False  # .env has no finding or OK
+    assert ".env" in result.coverage_gaps
+    assert ".github/workflows/ci.yml" not in result.coverage_gaps
+    # The dot-prefixed path is reported intact, not mangled to 'github/...'
+    assert ".github/workflows/ci.yml" in result.to_dict()["changed_files"]
+
+
+@pytest.mark.unit
+def test_to_dict_surfaces_findings_and_changed_files():
+    """to_dict() reports full findings (not just counts) and the changed files."""
+    findings_text = "src/main.py:7: CRITICAL: boom\nsrc/util.py: LOW: nit"
+    result = derive_verdict(findings_text, ["src/main.py", "src/util.py"])
+
+    out = result.to_dict()
+    assert out["verdict"] == "fail"
+    assert out["findings_count"] == 2
+    assert out["blocking_count"] == 1
+    assert out["findings"][0]["severity"] == "CRITICAL"
+    assert out["findings"][0]["line"] == 7
+    assert out["blocking_issues"][0]["file"] == "src/main.py"
+    assert out["changed_files"] == ["src/main.py", "src/util.py"]
