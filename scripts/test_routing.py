@@ -105,6 +105,8 @@ def main() -> int:
             failed += 1
 
     # --- Type dispatch table is complete and well-formed ---------------------
+    # With TypeSpec the skill/mode/resolution fields are guaranteed present by
+    # construction, so only completeness and mode-validity can still go wrong.
     print("dispatch table integrity:")
     if set(routing.TYPE_DISPATCH) != routing.TICKET_TYPES:
         print(
@@ -112,14 +114,14 @@ def main() -> int:
             f"!= TICKET_TYPES {sorted(routing.TICKET_TYPES)}"
         )
         failed += 1
-    for ttype, entry in routing.TYPE_DISPATCH.items():
-        if entry.get("mode") not in ("AFK", "HITL"):
-            print(f"  FAIL type {ttype!r} has bad mode {entry.get('mode')!r}")
-            failed += 1
-        for key in ("skill", "mode", "resolution"):
-            if not entry.get(key):
-                print(f"  FAIL type {ttype!r} missing '{key}'")
-                failed += 1
+    bad_modes = [
+        ttype
+        for ttype, entry in routing.TYPE_DISPATCH.items()
+        if entry.mode not in ("AFK", "HITL")
+    ]
+    if bad_modes:
+        print(f"  FAIL types with unknown mode: {sorted(bad_modes)}")
+        failed += 1
 
     # --- Ambiguity is a hard error, not a silent pick ------------------------
     print("ambiguity raises:")
@@ -142,23 +144,31 @@ def main() -> int:
             print(f"  FAIL route({sorted(labels)!r}) should have raised (ambiguous {axis})")
             failed += 1
 
-    # --- Determinism: identical input → identical output ---------------------
-    print("determinism:")
-    for _ in range(3):
-        if routing.route(["ready-for-agent", "task"]) != routing.Route(
-            routing.ACTION_DISPATCH, "task"
-        ):
-            print("  FAIL route is not deterministic across calls")
+    # --- Determinism: the route never depends on label order -----------------
+    # route() normalizes labels to a set, so the same labels in any order —
+    # under any set-iteration order — must yield the same Route.
+    print("determinism (order-independent):")
+    order_pairs = [
+        (["ready-for-agent", "task"], ["task", "ready-for-agent"]),
+        (
+            ["needs-info", "bug", "enhancement"],
+            ["enhancement", "bug", "needs-info"],
+        ),
+    ]
+    for left, right in order_pairs:
+        if routing.route(left) != routing.route(right):
+            print(f"  FAIL route is order-sensitive: {left!r} vs {right!r}")
             failed += 1
-            break
 
     total = (
         len(readiness_cases)
         + len(dispatch_cases)
         + len(ortho_cases)
-        + 1
+        + 1  # ready-but-untyped → triage gap
         + len(accessor_cases)
+        + 2  # dispatch-table completeness + mode-validity
         + len(ambiguity_cases)
+        + len(order_pairs)
     )
     if failed:
         print(f"\n{failed} routing test(s) failed (of {total} cases).", file=sys.stderr)

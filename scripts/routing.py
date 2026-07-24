@@ -24,45 +24,67 @@ orthogonality to the triage state.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Iterable, Literal, Optional, TypeVar
 
-# --- Axis 1: readiness (triage state) ----------------------------------------
-# The five canonical triage roles (see docs/agents/triage-labels.md). Exactly
-# one (or none) is present on a ticket.
-READINESS_STATES = frozenset(
+# --- Domain types -------------------------------------------------------------
+# Both label axes are small, closed enumerations. Aliasing them as ``Literal``
+# types lets the constants, ``Route``, and ``TypeSpec`` carry the domain in
+# their types instead of bare ``str`` — the dispatch invariant becomes a type,
+# not a runtime guess.
+
+# Axis 1 — the readiness (triage) state. The five canonical triage roles (see
+# docs/agents/triage-labels.md); exactly one, or none, is present on a ticket.
+ReadinessState = Literal[
+    "needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix"
+]
+
+# Axis 2 — the ticket type, the kind of work (see docs/agents/ticket-types.md).
+# Orthogonal to readiness state: the loop gates on state, then dispatches on
+# type. Set at ticket creation; never inferred from prose.
+TicketType = Literal["research", "prototype", "grilling", "task"]
+
+# How a dispatched type's skill runs: unattended (AFK), or paused for a human
+# turn (HITL). HITL types never fake the human's side of the exchange.
+Mode = Literal["AFK", "HITL"]
+
+READINESS_STATES: frozenset[ReadinessState] = frozenset(
     {"needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix"}
 )
 
-# --- Axis 2: ticket type -----------------------------------------------------
-# The kind of work a ticket represents (see docs/agents/ticket-types.md).
-# Orthogonal to readiness state: the loop gates on state, then dispatches on
-# type. Set at ticket creation; never inferred from prose.
-TICKET_TYPES = frozenset({"research", "prototype", "grilling", "task"})
+TICKET_TYPES: frozenset[TicketType] = frozenset(
+    {"research", "prototype", "grilling", "task"}
+)
 
-# Type dispatch table — maps a type to the external skill the loop invokes, its
-# AFK/HITL mode, and its resolution ritual (ADR-0008 §3). Doing-skills stay
-# external; the loop *invokes* them, it does not carry them.
-TYPE_DISPATCH = {
-    "research": {
-        "skill": "/research",
-        "mode": "AFK",
-        "resolution": "findings comment → close",
-    },
-    "prototype": {
-        "skill": "/prototype",
-        "mode": "HITL",
-        "resolution": "pause → link artifact → close",
-    },
-    "grilling": {
-        "skill": "/grilling + /domain-modeling",
-        "mode": "HITL",
-        "resolution": "pause → record decision → close",
-    },
-    "task": {
-        "skill": "/implement + /code-review",
-        "mode": "AFK",
-        "resolution": "PR → derived verdict → merge → close",
-    },
+@dataclass(frozen=True)
+class TypeSpec:
+    """A ticket type's dispatch entry (ADR-0008 §3): the external skill the loop
+    invokes, its run mode, and its resolution ritual. Doing-skills stay external
+    — the loop *invokes* them, it does not carry them.
+    """
+
+    skill: str
+    mode: Mode
+    resolution: str
+
+
+# Type dispatch table — maps each type to its entry (ADR-0008 §3).
+TYPE_DISPATCH: dict[TicketType, TypeSpec] = {
+    "research": TypeSpec(
+        skill="/research", mode="AFK", resolution="findings comment → close"
+    ),
+    "prototype": TypeSpec(
+        skill="/prototype", mode="HITL", resolution="pause → link artifact → close"
+    ),
+    "grilling": TypeSpec(
+        skill="/grilling + /domain-modeling",
+        mode="HITL",
+        resolution="pause → record decision → close",
+    ),
+    "task": TypeSpec(
+        skill="/implement + /code-review",
+        mode="AFK",
+        resolution="PR → derived verdict → merge → close",
+    ),
 }
 
 # The action the loop takes for a claimed ticket.
@@ -82,10 +104,17 @@ class Route:
     """
 
     action: str
-    ticket_type: Optional[str] = None
+    ticket_type: Optional[TicketType] = None
 
 
-def _pick_axis(labels, universe, axis_name):
+_Label = TypeVar("_Label", bound=str)
+
+
+def _pick_axis(
+    labels: Iterable[str],
+    universe: frozenset[_Label],
+    axis_name: str,
+) -> Optional[_Label]:
     """Return the single label from ``universe`` present in ``labels``, or None.
 
     Raises ``ValueError`` if more than one is present — each axis carries at
@@ -101,7 +130,7 @@ def _pick_axis(labels, universe, axis_name):
     return next(iter(found)) if found else None
 
 
-def readiness_state(labels: Iterable[str]) -> Optional[str]:
+def readiness_state(labels: Iterable[str]) -> Optional[ReadinessState]:
     """Return the single triage-state label on a ticket, or ``None`` if none.
 
     Raises ``ValueError`` if more than one readiness label is present — a
@@ -110,7 +139,7 @@ def readiness_state(labels: Iterable[str]) -> Optional[str]:
     return _pick_axis(labels, READINESS_STATES, "readiness")
 
 
-def ticket_type(labels: Iterable[str]) -> Optional[str]:
+def ticket_type(labels: Iterable[str]) -> Optional[TicketType]:
     """Return the single type label on a ticket, or ``None`` if none.
 
     Raises ``ValueError`` if more than one type label is present — type is a
