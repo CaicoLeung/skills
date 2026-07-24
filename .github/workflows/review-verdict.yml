@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Resolve PR number and head SHA
+      - name: Resolve PR number
         id: pr
         run: |
           if [ -n "${{ inputs.pr_number }}" ]; then
@@ -41,6 +41,13 @@ jobs:
           else
             echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Resolve PR head SHA
+        id: sha
+        # SHA resolution is a separate step so it can read the number step's
+        # output: a step cannot reference its own $GITHUB_OUTPUT mid-run, which
+        # broke workflow_dispatch (the else branch ran `gh pr view ""`).
+        run: |
           # PR head SHA: from the pull_request event, else resolved via gh.
           if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
             echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
@@ -56,7 +63,7 @@ jobs:
           python3 scripts/review_verdict.py \
             --repo "$GITHUB_REPOSITORY" \
             --pr "${{ steps.pr.outputs.number }}" \
-            --sha "${{ steps.pr.outputs.sha }}" \
+            --sha "${{ steps.sha.outputs.sha }}" \
             --reviewer-login "${{ vars.REVIEWER_LOGIN }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
