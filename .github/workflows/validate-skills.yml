@@ -26,5 +26,7 @@ jobs:
         run: python3 scripts/test_routing.py
       - name: Run independent-reviewer tests (ADR-0007)
         run: python3 scripts/test_reviewer.py
+      - name: Run loop driver turn-planning tests (ADR-0008 / T5a)
+        run: python3 scripts/test_loop.py
       - name: Run review-verdict selection tests (ADR-0007 enforcement)
         run: python3 scripts/test_review_verdict.py
