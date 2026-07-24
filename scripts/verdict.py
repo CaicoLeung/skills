@@ -95,7 +95,7 @@ class Finding:
             summary=match.group("summary").strip(),
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """JSON-serializable view of this finding."""
         return {
             "file": self.file,
@@ -115,7 +115,7 @@ class VerdictResult:
     coverage_gaps: tuple[str, ...]  # Files with no findings or explicit OK
     blocking_issues: tuple[Finding, ...]  # CRITICAL or HIGH findings
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Convert to a JSON-serializable dict.
 
         Surfaces every finding (with severity/line/summary), the blocking
