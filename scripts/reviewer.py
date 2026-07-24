@@ -42,11 +42,17 @@ from pathlib import Path
 
 # verdict.py is a sibling (same scripts/ dir). Importing it keeps the findings
 # format defined in exactly one place (T1) — reviewer never re-parses it.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Unlike review_verdict.py (which imports verdict lazily inside main()), this
+# module binds verdict at module scope — ExtractedFindings is annotated with
+# verdict.Finding and extract_findings calls verdict.derive_verdict — so the
+# import stays here. The guard avoids re-inserting the path on every import.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 import verdict  # noqa: E402
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _SCRIPTS_DIR.parent
 DEFAULT_TEMPLATE = REPO_ROOT / "skills" / "ticket-workflow-core" / "review-prompt.md"
 
 # The two /code-review axes (ADR-0007). Findings are produced for both; the
@@ -64,16 +70,23 @@ SLOT_CHANGED_FILES = "{{CHANGED_FILES}}"
 # absence in the committed template.
 FORBIDDEN_SLOTS = ("{{COMMIT_MESSAGE}}", "{{PR_DESCRIPTION}}", "{{AUTHOR_PROSE}}")
 
-# A self-declared verdict line, in any common spelling. The prompt forbids it;
-# this regex is defense in depth so it can never reach verdict.py. Matches only
-# lines that *start* with VERDICT (after optional whitespace/markdown-bold), so
-# a finding summary that merely mentions "the verdict script" is preserved.
-VERDICT_LINE_RE = re.compile(r"^\s*\**\s*VERDICT\b[\s:*-]*(pass|fail)\b", re.IGNORECASE)
+# A self-declared verdict line, in any spelling. The prompt forbids it; this
+# regex is defense in depth so it can never reach the posted comment. Any line
+# that *starts* with VERDICT (after optional whitespace/markdown-bold) is
+# stripped regardless of its tail — the old ``[\s:*-]*(pass|fail)\b`` tail let
+# ``VERDICT passed`` / ``VERDICT is pass`` / ``VERDICT: passes`` survive into
+# the posted comment. Prose that merely *mentions* a verdict ("The verdict
+# script runs") never starts with the word, so it is preserved.
+VERDICT_LINE_RE = re.compile(r"^\s*\**\s*VERDICT\b", re.IGNORECASE)
 
 # The machine-readable SHA marker prefixing every findings comment the reviewer
-# App posts. The review-verdict CI (T3) greps this to select the latest findings
-# whose reviewed-sha == PR head.
-COMMENT_SHA_RE = re.compile(r"<!-- review-verdict sha=([0-9a-f]+) -->")
+# App posts. The ``review-verdict`` CI (T3) selects the latest findings whose
+# reviewed-sha == PR head by matching this against
+# ``review_verdict.FINDINGS_MARKER_RE``. The two MUST agree on token
+# (``review-verdict-findings``) and sha width (7..40 hex); the cross-module test
+# ``test_comment_marker_matches_ci_reader`` enforces it by round-tripping this
+# module's output through ``review_verdict.extract_reviewed_sha``.
+COMMENT_MARKER_FMT = "<!-- review-verdict-findings sha={sha} -->"
 
 
 @dataclass(frozen=True)
@@ -97,7 +110,7 @@ class ExtractedFindings:
         """
         return not self.had_verdict_line and not self.coverage_gaps
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """JSON-serializable validation summary (no cleaned_text — that is posted)."""
         return {
             "well_formed": self.well_formed,
@@ -123,6 +136,10 @@ def build_review_prompt(
     axis). Substitution is single-pass, so a slot token appearing inside the
     diff or spec is inserted literally and never re-interpreted (a diff cannot
     inject a fake spec, and vice versa).
+
+    ``template`` exists for unit tests that render a non-committed fixture; the
+    production CLI never passes it, so only the committed ``review-prompt.md``
+    is ever rendered in the loop (ADR-0007 §2, prompt axis).
     """
     text = (
         template
@@ -187,23 +204,18 @@ def extract_findings(
 def format_findings_comment(cleaned_text: str, sha: str) -> str:
     """Render the sha-tagged comment body the reviewer App identity posts.
 
-    The leading marker is grepped by the ``review-verdict`` CI (T3) to select
-    the latest findings whose reviewed-sha == PR head; a stale review (sha ≠ PR
-    head) reads as "no current review." ``cleaned_text`` is the reviewer's
-    output verbatim, minus any stripped verdict line — the reviewer's voice is
-    preserved, only the forged verdict is excised.
+    The leading marker is matched by ``review_verdict.FINDINGS_MARKER_RE`` (T3
+    CI) to select the latest findings whose reviewed-sha == PR head; a stale
+    review (sha ≠ PR head) reads as "no current review." ``sha`` must be 7..40
+    hex so the reader accepts it. ``cleaned_text`` is the reviewer's output
+    verbatim, minus any stripped verdict line — the reviewer's voice is
+    preserved, only a forged verdict is excised.
+
+    Reading the marker back is the CI reader's job (T3,
+    ``extract_reviewed_sha``); this producer module only writes it, so the
+    marker regex lives in exactly one place.
     """
-    return f"<!-- review-verdict sha={sha} -->\n\n{cleaned_text.strip()}\n"
-
-
-def comment_sha(comment_body: str) -> str | None:
-    """Return the reviewed-sha embedded in a findings comment, or ``None``.
-
-    Used by the review-verdict CI (T3) and by tests asserting a comment is
-    current for a given PR head.
-    """
-    match = COMMENT_SHA_RE.search(comment_body)
-    return match.group(1) if match else None
+    return f"{COMMENT_MARKER_FMT.format(sha=sha)}\n\n{cleaned_text.strip()}\n"
 
 
 # --- CLI (the loop driver calls this) ----------------------------------------
@@ -259,7 +271,10 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="changed-files list, one per line (or '-')",
     )
-    build.add_argument("--template", help="override the fixed template path")
+    # No --template flag: the CLI renders ONLY the committed fixed template
+    # (ADR-0007 §2, prompt axis). build_review_prompt keeps a template= kwarg
+    # for unit tests, but an implementer-controlled loop cannot frame its own
+    # review prompt through the CLI.
 
     fmt = sub.add_parser(
         "format-findings",
@@ -276,15 +291,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "build-prompt":
-        template = None
-        if args.template:
-            template = Path(args.template).read_text(encoding="utf-8")
         prompt = build_review_prompt(
             diff=_read_arg(args.diff),
             spec=_read_arg(args.spec),
             sha=args.sha,
             changed_files=_read_lines(args.changed_files),
-            template=template,
         )
         sys.stdout.write(prompt)
         return 0

@@ -21,7 +21,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import review_verdict  # noqa: E402
 import reviewer  # noqa: E402
 import verdict  # noqa: E402
 
@@ -107,8 +110,8 @@ def test_build_prompt_uses_diff_and_spec_only(counter: list[int]) -> None:
         _fail(counter)
 
     # Template override: a caller-supplied template is rendered in place of the
-    # committed default (used by tests and the --template CLI flag). The default
-    # must not be hard-coded into the render path.
+    # committed default. Exposed only to tests (the CLI renders the committed
+    # template only); the default must not be hard-coded into the render path.
     custom = "REVIEW {{SHA}}\nSPEC={{TICKET_SPEC}}\nDIFF={{DIFF}}\nFILES={{CHANGED_FILES}}\n"
     rendered = reviewer.build_review_prompt("D", "S", "H", ["a.py", "b.py"], template=custom)
     for needle in ("REVIEW H", "SPEC=S", "DIFF=D", "FILES=- a.py\n- b.py"):
@@ -128,6 +131,13 @@ def test_strip_verdict_line(counter: list[int]) -> None:
         ("VERDICT: PASS", True),
         ("**VERDICT**: fail", True),
         ("VERDICT   -   pass", True),
+        # Tails other than exactly `pass|fail` must also be stripped — the old
+        # regex only matched `pass|fail\b`, so these slipped into the posted
+        # comment (T4 review: AC#4 bypass).
+        ("VERDICT passed", True),
+        ("VERDICT failed", True),
+        ("VERDICT is pass", True),
+        ("VERDICT: passes", True),
         ("x.py:10: HIGH: bug", False),
         ("x.py: OK", False),
         ("### Standards", False),
@@ -225,16 +235,18 @@ def test_extract_findings(counter: list[int]) -> None:
 
 
 def test_format_findings_comment(counter: list[int]) -> None:
-    """The posted comment is sha-tagged and round-trips through comment_sha."""
+    """The posted comment is sha-tagged and round-trips through the CI reader."""
     print("format_findings_comment:")
-    sha = "deadbeefcafe"
+    sha = "deadbeefcafe"  # 12 hex — the CI reader requires 7..40 hex
     cleaned = "### Standards\nx.py: OK\n### Spec\nx.py: OK\n"
     comment = reviewer.format_findings_comment(cleaned, sha)
 
-    if reviewer.comment_sha(comment) != sha:
+    # The producer writes the marker the review-verdict CI (T3) greps; read it
+    # back with that module's parser, not a duplicated one in the producer.
+    if review_verdict.extract_reviewed_sha(comment) != sha:
         print(
-            f"  FAIL comment_sha round-trip: got "
-            f"{reviewer.comment_sha(comment)!r} expected {sha!r}"
+            f"  FAIL extract_reviewed_sha round-trip: got "
+            f"{review_verdict.extract_reviewed_sha(comment)!r} expected {sha!r}"
         )
         _fail(counter)
     if cleaned.strip() not in comment:
@@ -242,8 +254,8 @@ def test_format_findings_comment(counter: list[int]) -> None:
         _fail(counter)
 
     # No marker → None (a plain PR comment is not a review).
-    if reviewer.comment_sha("just findings, no marker") is not None:
-        print("  FAIL comment_sha should be None without the marker")
+    if review_verdict.extract_reviewed_sha("just findings, no marker") is not None:
+        print("  FAIL extract_reviewed_sha should be None without the marker")
         _fail(counter)
 
 
@@ -263,11 +275,13 @@ def test_end_to_end_composition(counter: list[int]) -> None:
         print("  FAIL prompt missing its inputs")
         _fail(counter)
 
-    # Pass: clean findings on both axes.
+    # Pass: clean findings on both axes. sha is 7+ hex so the CI reader
+    # (extract_reviewed_sha, 7..40 hex) accepts it; derive_verdict ignores the
+    # marker line itself.
     good_out = "### Standards\nx.py: OK\n### Spec\nx.py: OK\n"
     good = reviewer.extract_findings(good_out, changed)
-    good_comment = reviewer.format_findings_comment(good.cleaned_text, "abc")
-    if reviewer.comment_sha(good_comment) != "abc":
+    good_comment = reviewer.format_findings_comment(good.cleaned_text, "abc1234")
+    if review_verdict.extract_reviewed_sha(good_comment) != "abc1234":
         print("  FAIL sha marker lost on passing comment")
         _fail(counter)
     if not verdict.derive_verdict(good_comment, changed).passed:
@@ -286,12 +300,43 @@ def test_end_to_end_composition(counter: list[int]) -> None:
         _fail(counter)
 
 
+def test_comment_marker_matches_ci_reader(counter: list[int]) -> None:
+    """The producer's comment marker is exactly what the CI reader (T3) greps.
+
+    Guards the cross-module contract flagged in the T4 review: producer and CI
+    must agree on token (``review-verdict-findings``) and sha width (7..40 hex).
+    Round-trips ``format_findings_comment`` output through
+    ``review_verdict.extract_reviewed_sha`` for short, typical, and full SHAs,
+    and confirms a too-short sha and a plain comment are rejected.
+    """
+    print("comment marker matches CI reader:")
+    for sha in ("abcdef0", "deadbeefcafe", "0" * 40):
+        comment = reviewer.format_findings_comment("body", sha)
+        got = review_verdict.extract_reviewed_sha(comment)
+        if got != sha:
+            print(f"  FAIL sha={sha!r} did not round-trip (got {got!r})")
+            _fail(counter)
+
+    # A SHA shorter than the reader's 7-hex floor is rejected — documents the
+    # reader's lower bound the producer does not enforce itself.
+    short = reviewer.format_findings_comment("body", "abc")
+    if review_verdict.extract_reviewed_sha(short) is not None:
+        print("  FAIL reader accepted a <7-hex sha (contract drift)")
+        _fail(counter)
+
+    # A plain PR comment is not a findings review.
+    if review_verdict.extract_reviewed_sha("## Review\nLooks fine") is not None:
+        print("  FAIL reader accepted a plain comment as a findings review")
+        _fail(counter)
+
+
 def main() -> int:
     counter = [0]
     test_template_has_no_author_prose_slot(counter)
     test_build_prompt_uses_diff_and_spec_only(counter)
     test_strip_verdict_line(counter)
     test_extract_findings(counter)
+    test_comment_marker_matches_ci_reader(counter)
     test_format_findings_comment(counter)
     test_end_to_end_composition(counter)
 
@@ -302,16 +347,17 @@ def main() -> int:
         + 4  # build_prompt unreplaced slots
         + 2  # single-pass
         + 4  # template override
-        + 13  # strip cases
+        + 17  # strip cases (incl. verdict-tail bypasses)
         + 4  # strip multi-line
         + 4  # extract groups
+        + 6  # comment-marker ↔ CI-reader contract
         + 3  # format comment
         + 5  # e2e
     )
     if counter[0]:
         print(f"\n{counter[0]} reviewer test assertion(s) failed.", file=sys.stderr)
         return 1
-    print(f"\nAll reviewer assertions passed (~{cases} checks across 6 groups).")
+    print(f"\nAll reviewer assertions passed (~{cases} checks across 7 groups).")
     return 0
 
 
