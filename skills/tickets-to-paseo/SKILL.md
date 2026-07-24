@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
 description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor)."
-version: 0.5.0
+version: 0.5.1
 requires:
   - project
   - tickets
@@ -53,9 +53,11 @@ Core's `DEPENDS_ON` primitive maps to Paseo chat rooms for coordination:
    paseo chat post "wf-$workflowId" "DONE task_$taskId pr=$pr_url merged_at=$timestamp"
    ```
 
-3. **Dependent agents wait:** Dependent tasks use `paseo chat wait` to block until supervisor posts merged-and-gated:
+3. **Dependent agents wait:** Dependent tasks block until the supervisor posts merged-and-gated. **`paseo chat wait` (0.1.110) has no `--filter`** — it only blocks for the next message (optional `--timeout`); filter client-side. Anchor on `task_<id> pr=` so (a) `task_1` does not substring-match `task_10`, and (b) the wait resolves only on the supervisor's merged-and-gated signal (`pr=` present), not an agent-finished `DONE task_<id>`:
    ```bash
-   paseo chat wait "wf-$workflowId" --filter "DONE task_$blockerId"
+   until paseo chat read "wf-$workflowId" | grep -qE "DONE task_${blockerId} pr="; do
+     paseo chat wait "wf-$workflowId" --timeout 30m
+   done
    ```
 
 This preserves the dependency graph with verified completion: dependents unblock only on merged-and-gated, not agent-finished. **This is a gap, not a feature** — live daemon edges would be superior; chat rooms are the closest available surface.
@@ -330,6 +332,7 @@ Generated workflow must:
 
 ## Version Change
 
+0.5.1: Fixed DEPENDS_ON wait — `paseo chat wait` (0.1.110) has no `--filter`; dependents now filter client-side (`chat read` + `grep`) anchored on `task_<id> pr=`, so `task_1` no longer matches `task_10` and the wait resolves only on the supervisor's merged-and-gated signal, not agent-finished.
 0.5.0: Added subgraph scoping to SUPERVISE — when a blocker is stuck, only its transitive dependents are blocked; independent tasks proceed. Supervisor computes blocked subgraph from dependency graph and posts scoped escalation.
 0.4.0: Added SUPERVISE primitive — supervisor agent polls GitHub API, posts merged-and-gated completion, escalates stuck gates within bounded window. Honest reconciliation: polling gate state ≠ polling agents.
 0.3.0: Added merge policy option (auto vs wait-for-human) to GATE primitive; maps to GitHub auto-merge.
