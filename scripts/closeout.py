@@ -180,7 +180,14 @@ def plan_closeout(verdict: VerdictState, round: int) -> CloseoutDecision:
             reason="no current review for this head; invoke the independent reviewer",
         )
 
-    # VERDICT_FAIL with rounds remaining.
+    # VERDICT_FAIL with rounds remaining. Any other status reaching here is a
+    # programmer error — pass/missing are handled above, so make the totality
+    # claim honest rather than silently treating an unknown status as a fail.
+    if verdict.status != VERDICT_FAIL:
+        raise ValueError(
+            f"unknown verdict status {verdict.status!r}; "
+            f"expected one of {VERDICT_PASS!r}/{VERDICT_FAIL!r}/{VERDICT_MISSING!r}"
+        )
     return CloseoutDecision(
         action=ACTION_FIX,
         round=round,

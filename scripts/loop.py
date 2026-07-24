@@ -600,7 +600,8 @@ def _build_reviewer_prompt(
 
 
 def read_verdict_state(
-    cfg: DriverConfig, issue_number: int, pr_number: int, head_sha: str
+    cfg: DriverConfig, issue_number: int, pr_number: int, head_sha: str,
+    comments: Optional[list[dict]] = None,
 ) -> closeout.VerdictState:
     """Compose the PR's current derived verdict (T3 selection + T1 rule).
 
@@ -610,11 +611,16 @@ def read_verdict_state(
     :class:`closeout.VerdictState` the planner consumes. A missing/stale review
     reads as ``VERDICT_MISSING`` (no findings to hand the fixer); the findings
     body is carried verbatim so the fix-step prompt embeds it exactly.
+
+    ``comments`` may be passed to reuse PR comments the caller already fetched
+    (avoids a second paginated fetch); fetched via ``gh`` when ``None``.
     """
     import review_verdict  # noqa: E402
     import verdict  # noqa: E402
 
-    comments = _gh_pr_issue_comments(pr_number, cfg.repo)
+    comments = comments if comments is not None else _gh_pr_issue_comments(
+        pr_number, cfg.repo
+    )
     selected = review_verdict.select_current_findings(
         comments, head_sha, cfg.reviewer_login
     )
@@ -633,17 +639,20 @@ def read_verdict_state(
     )
 
 
-def review_round_count(cfg: DriverConfig, pr_number: int) -> int:
+def review_round_count(cfg: DriverConfig, pr_number: int, comments: Optional[list[dict]] = None) -> int:
     """Number of reviewer findings comments already posted on the PR.
 
     A *round* is one completed independent review of the current PR head
     (ADR-0008 §5; ``closeout.plan_closeout`` counts the cap in these). The
     driver counts the reviewer identity's sha-tagged findings comments — each
-    posted comment is one review round completed.
+    posted comment is one review round completed. ``comments`` may be passed to
+    reuse PR comments the caller already fetched; fetched via ``gh`` when ``None``.
     """
     import review_verdict  # noqa: E402
 
-    comments = _gh_pr_issue_comments(pr_number, cfg.repo)
+    comments = comments if comments is not None else _gh_pr_issue_comments(
+        pr_number, cfg.repo
+    )
     rounds = 0
     for c in comments:
         user = (c.get("user") or {})
@@ -802,10 +811,18 @@ def run_closeout_round(
     run = runner or (lambda cmd, **kw: subprocess.run(cmd, check=True, **kw).returncode)
 
     sha = head_sha or _gh_pr_head_sha(pr_number, cfg.repo)
+    # Fetch the PR's issue comments once and thread them through both the
+    # verdict derivation and the round count — each would otherwise paginate
+    # the same endpoint a second time per round.
+    comments = None
+    if verdict_state is None or round_number is None:
+        comments = _gh_pr_issue_comments(pr_number, cfg.repo)
     vs = verdict_state if verdict_state is not None else read_verdict_state(
-        cfg, issue_number, pr_number, sha
+        cfg, issue_number, pr_number, sha, comments=comments
     )
-    rnd = round_number if round_number is not None else review_round_count(cfg, pr_number)
+    rnd = round_number if round_number is not None else review_round_count(
+        cfg, pr_number, comments=comments
+    )
 
     decision = closeout.plan_closeout(vs, rnd)
 
