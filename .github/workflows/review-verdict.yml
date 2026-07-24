@@ -1,0 +1,62 @@
+name: review-verdict
+
+# The derived-verdict gate (ADR-0007). Runs on every PR: finds the reviewer
+# identity's latest findings comment whose reviewed-SHA equals the PR head,
+# derives the verdict from it (scripts/verdict.py), and the job's own
+# pass/fail becomes the `review-verdict` status check. A stale review
+# (sha mismatch) or a missing review fails as "no current review".
+#
+# Required by branch protection alongside `validate-skills`. The job name
+# below MUST stay `review-verdict` — scripts/skills.py drift guard asserts
+# every required context has a matching workflow job name.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to evaluate"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review-verdict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Resolve PR number and head SHA
+        id: pr
+        run: |
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            echo "number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+          # PR head SHA: from the pull_request event, else resolved via gh.
+          if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
+            echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            SHA=$(gh pr view "${{ steps.pr.outputs.number }}" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')
+            echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive verdict from reviewer's findings (ADR-0007)
+        run: |
+          python3 scripts/review_verdict.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "${{ steps.pr.outputs.number }}" \
+            --sha "${{ steps.pr.outputs.sha }}" \
+            --reviewer-login "${{ vars.REVIEWER_LOGIN }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

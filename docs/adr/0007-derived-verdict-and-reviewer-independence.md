@@ -100,6 +100,11 @@ context has a matching workflow job) keeps this honest with no new machinery.
 
 - `ticket-workflow-core` v0.5.0 — `GATE` verdict protocol: declared → derived;
   deletes the `VERDICT pass|fail` schema.
-- New: `scripts/verdict.py`, `.github/workflows/review-verdict.yml`, a fixed
-  review-prompt template.
-- Branch protection: add the `review-verdict` context.
+- `scripts/verdict.py` — the pure verdict rule (ADR-0007 §1).
+- `scripts/review_verdict.py` + `.github/workflows/review-verdict.yml` — the CI
+  enforcement: select the reviewer identity's latest sha-matched findings
+  comment, derive the verdict, expose it as the `review-verdict` status check
+  (ADR-0007 §3). Comment format and demo procedure:
+  [`docs/agents/review-verdict.md`](../agents/review-verdict.md).
+- Branch protection: add the `review-verdict` context (alongside
+  `validate-skills`).
