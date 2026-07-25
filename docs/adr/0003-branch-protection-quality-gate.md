@@ -67,9 +67,10 @@ together.
 `validate-skills` job (`python3 scripts/build-marketplace.py --check`), so a stale
 `.claude-plugin/marketplace.json` fails the already-required `validate-skills` context
 and blocks merge — no separate context is warranted. A regression test
-(`scripts/test_marketplace.py → CI gating guard`) fails if that step is removed, so the
-gate cannot be silently deleted. This is what stops a #41-style phantom-plugin PR from
-merging green.
+(`scripts/test_marketplace.py → CI gating guard`) fails if that step is removed or
+commented out, so the drift step resists silent deletion (the residual limit — a PR
+that deletes both the drift step and the test step at once — is left to human review;
+the `skills.py` contexts↔jobs drift guard still requires the `validate-skills` job).
 
 ### 3. Gate enforcement location
 

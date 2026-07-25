@@ -257,11 +257,15 @@ def main() -> int:
     # --check` (issue #46). A future PR that deletes or comments out that step
     # would silently reopen the #41 phantom-plugin hole. This assertion makes
     # such a deletion fail this test, which itself runs as a step in the same
-    # job — so the gate is self-defending. Mirrors the contexts<->jobs drift
-    # guard in skills.py, which parses structurally; here we assert active
-    # (non-commented) lines so a commented-out step is caught too. The matches
-    # are intentionally literal: a script rename or step rewording is a
-    # conscious change this guard should surface, not silently absorb.
+    # job, so removing the drift step turns this guard red. Coverage limit: a
+    # PR that deletes BOTH the drift step AND this test's step at once would
+    # stop the guard running at all — that same-PR deletion is out of reach for
+    # a same-job self-test and is left to human review (and the fact that the
+    # skills.py contexts<->jobs drift guard still requires the `validate-skills`
+    # job to exist). Mirrors that drift guard, which parses structurally; here
+    # we assert active (non-commented) lines so a commented-out step is caught
+    # too. The matches are intentionally literal: a script rename or step
+    # rewording is a conscious change this guard should surface, not absorb.
     print("CI gating guard:")
     repo_root = Path(__file__).resolve().parent.parent
     workflow = repo_root / ".github" / "workflows" / "validate-skills.yml"
