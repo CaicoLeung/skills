@@ -398,6 +398,78 @@ def cmd_index(args) -> int:
     return 0
 
 
+# --- Marketplace JSON generation (ADR-0002 frontmatter → plugin entries) ----
+
+
+def _load_marketplace_config(config_path: Path) -> dict:
+    """Load marketplace-level config or exit with a clear error."""
+    if not config_path.exists():
+        print(f"error: marketplace config not found: {config_path}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        with open(config_path, encoding="utf-8") as fh:
+            config = json.load(fh)
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid JSON in {config_path}: {exc}", file=sys.stderr)
+        sys.exit(2)
+    for key in ("name", "owner", "metadata"):
+        if key not in config:
+            print(f"error: {config_path} missing required key '{key}'", file=sys.stderr)
+            sys.exit(2)
+    if "description" not in config.get("metadata", {}):
+        print(f"error: {config_path} metadata.description is required", file=sys.stderr)
+        sys.exit(2)
+    return config
+
+
+def render_marketplace(skills_root: Path, config: dict) -> str:
+    """Generate marketplace.json from config + conforming skills' frontmatter."""
+    skills = [s for s in discover(skills_root) if not s.errors]
+    plugins = []
+    for s in skills:
+        m = s.meta
+        plugins.append({
+            "name": m["name"],
+            "source": f"./skills/{s.dir}",
+            "description": m["description"],
+            "version": m["version"],
+            "strict": False,
+            "skills": ["./"],
+        })
+    # Sort plugins by name for deterministic output.
+    plugins.sort(key=lambda p: p["name"])
+    marketplace = {
+        "name": config["name"],
+        "owner": config["owner"],
+        "metadata": config["metadata"],
+        "plugins": plugins,
+    }
+    return json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+
+
+def cmd_marketplace(args) -> int:
+    repo_root = Path(args.root).resolve().parent
+    config_path = Path(args.config) if args.config else repo_root / ".claude-plugin" / "marketplace-config.json"
+    out = Path(args.output) if args.output else repo_root / ".claude-plugin" / "marketplace.json"
+    config = _load_marketplace_config(config_path)
+    skills_root = Path(args.root)
+    generated = render_marketplace(skills_root, config)
+    if args.check:
+        existing = out.read_text(encoding="utf-8") if out.exists() else ""
+        if existing != generated:
+            print(
+                f"error: {out} is stale or missing — run "
+                f"'python3 scripts/build-marketplace.py' to regenerate.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"ok   {out} is up to date.")
+        return 0
+    out.write_text(generated, encoding="utf-8")
+    print(f"wrote {out}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -411,6 +483,13 @@ def main(argv=None) -> int:
     pi.add_argument("--output", help="output path (default: skills/INDEX.md)")
     pi.add_argument("--check", action="store_true", help="fail if the index is stale")
     pi.set_defaults(func=cmd_index)
+
+    pm = sub.add_parser("marketplace", help="generate or check .claude-plugin/marketplace.json")
+    pm.add_argument("--root", default="skills", help="skills directory (default: skills)")
+    pm.add_argument("--output", help="output path (default: .claude-plugin/marketplace.json)")
+    pm.add_argument("--config", help="config path (default: .claude-plugin/marketplace-config.json)")
+    pm.add_argument("--check", action="store_true", help="fail if the marketplace is stale")
+    pm.set_defaults(func=cmd_marketplace)
 
     args = p.parse_args(argv)
     return args.func(args)
