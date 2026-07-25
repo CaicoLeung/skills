@@ -204,23 +204,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     reader = GhCliReader()
     try:
         comments = reader.issue_comments(args.repo, args.pr)
-        selected = select_current_findings(comments, args.sha, args.reviewer_login)
-        if selected is None:
-            print(
-                f"::error::No current review: no findings comment from "
-                f"'{args.reviewer_login}' for SHA {args.sha} (stale or missing). "
-                f"A fresh review is required before merge."
-            )
-            return 1
-
         changed = reader.pr_changed_files(args.repo, args.pr)
-
-        result = derive_verdict(selected.body, changed)
     except RuntimeError as exc:
         # Single CLI catch (twin of the loop driver's): every gh failure surfaces
         # as one RuntimeError shape; report it as a CI error and exit non-zero.
+        # Only the gateway reads live here — the pure core below is uncaught,
+        # so a "no current review" (return 1) can never be masked as a read fail.
         print(f"::error::review-verdict GitHub read failed: {exc}")
         return 2
+
+    selected = select_current_findings(comments, args.sha, args.reviewer_login)
+    if selected is None:
+        print(
+            f"::error::No current review: no findings comment from "
+            f"'{args.reviewer_login}' for SHA {args.sha} (stale or missing). "
+            f"A fresh review is required before merge."
+        )
+        return 1
+
+    result = derive_verdict(selected.body, changed)
 
     print(
         f"review-verdict: reviewed-SHA={selected.sha} "

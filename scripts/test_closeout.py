@@ -25,44 +25,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _test_fakes import FakeGitHubReader  # noqa: E402
 from github import GitHubReader  # noqa: E402
 import closeout  # noqa: E402
 import loop  # noqa: E402
-
-
-class FakeGitHubReader:
-    """In-memory :class:`github.GitHubReader` for driver tests.
-
-    Duplicated small in test_loop.py (the repo's standalone-``_check`` test
-    convention has no shared helpers). Twins the ``runner`` injection: the
-    close-out driver is exercised through its own interface, no network.
-    """
-
-    def __init__(self) -> None:
-        self.labels: dict[int, list[str]] = {}
-        self.bodies: dict[int, str] = {}
-        self.comments: dict[int, list[dict]] = {}
-        self.head_shas: dict[int, str] = {}
-        self.diffs: dict[int, str] = {}
-        self.changed_files: dict[int, list[str]] = {}
-
-    def issue_labels(self, repo: str, issue: int) -> list[str]:
-        return self.labels.get(issue, [])
-
-    def issue_body(self, repo: str, issue: int) -> str:
-        return self.bodies.get(issue, "")
-
-    def issue_comments(self, repo: str, number: int) -> list[dict]:
-        return self.comments.get(number, [])
-
-    def pr_head_sha(self, repo: str, pr: int) -> str:
-        return self.head_shas.get(pr, "")
-
-    def pr_diff(self, repo: str, pr: int) -> str:
-        return self.diffs.get(pr, "")
-
-    def pr_changed_files(self, repo: str, pr: int) -> list[str]:
-        return self.changed_files.get(pr, [])
 
 
 def _check(condition: bool, label: str, failed: list[str]) -> None:
@@ -475,6 +441,64 @@ def main() -> int:
         f"round count read from the fake's comments (got {rep_fail['round']})",
         failed,
     )
+
+    # A PR with NO reviewer findings comment yet -> derived verdict MISSING at
+    # round 0 -> REVIEW. run_closeout_round must drive the full REVIEW path:
+    # plan_closeout -> _require_reviewer_independence -> build the fixed review
+    # prompt from the fake's diff+spec -> emit a paseo run on the SECONDARY
+    # provider in the reviewer's separate worktree. This is the one claimed
+    # testable path that had no end-to-end coverage through the driver.
+    print("run_closeout_round REVIEW path through the gateway (no review yet):")
+    cfg_rev = loop.DriverConfig(
+        repo="CaicoLeung/skills", reviewer_login="reviewer-bot",
+        provider="anthropic", model="claude-impl",
+        secondary_provider="openai", secondary_model="gpt-reviewer",
+    )
+    fake_rev = FakeGitHubReader()
+    fake_rev.head_shas[42] = sha
+    fake_rev.diffs[42] = "+diff line A\n-diff line B\n"
+    fake_rev.bodies[29] = "## Acceptance\n- do the thing\n"
+    fake_rev.changed_files[42] = ["scripts/x.py"]
+    # No comments[42]: the reviewer has not posted yet.
+    rep_rev = loop.run_closeout_round(29, 42, cfg_rev, gh=fake_rev, dry_run=True)
+    _check(
+        rep_rev["verdict"]["status"] == "missing",
+        f"no review comment -> MISSING verdict (got {rep_rev['verdict']['status']})",
+        failed,
+    )
+    _check(
+        rep_rev["round"] == 0,
+        f"no reviewer comments -> round 0 (got {rep_rev['round']})",
+        failed,
+    )
+    _check(
+        rep_rev["decision"]["action"] == "review",
+        "MISSING at round 0 -> REVIEW (independent reviewer invoked)",
+        failed,
+    )
+    rev_run = [c for c in rep_rev["commands"] if c[:1] == ["paseo"]]
+    _check(
+        len(rev_run) == 1,
+        f"REVIEW must emit one paseo command (got {len(rev_run)})",
+        failed,
+    )
+    if rev_run:
+        cmd = rev_run[0]
+        _check(
+            "openai" in cmd and "gpt-reviewer" in cmd,
+            "REVIEW must run on the SECONDARY provider/model",
+            failed,
+        )
+        _check(
+            "issue-29-review" in cmd,
+            "REVIEW must run in the reviewer's separate worktree",
+            failed,
+        )
+        _check(
+            "+diff line A" in cmd[-1] and "## Acceptance" in cmd[-1],
+            "REVIEW prompt must carry the fake's diff + spec verbatim",
+            failed,
+        )
 
     if failed:
         print(f"\n{len(failed)} close-out test(s) failed.", file=sys.stderr)

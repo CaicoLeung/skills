@@ -23,43 +23,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _test_fakes import FakeGitHubReader  # noqa: E402
 from github import GitHubReader  # noqa: E402
 import loop  # noqa: E402
 import routing  # noqa: E402
-
-
-class FakeGitHubReader:
-    """In-memory :class:`github.GitHubReader` for driver tests.
-
-    Twins the ``runner`` injection: the driver is exercised through its own
-    interface with no ``gh`` and no network. Hold dicts keyed by issue/PR number.
-    """
-
-    def __init__(self) -> None:
-        self.labels: dict[int, list[str]] = {}
-        self.bodies: dict[int, str] = {}
-        self.comments: dict[int, list[dict]] = {}
-        self.head_shas: dict[int, str] = {}
-        self.diffs: dict[int, str] = {}
-        self.changed_files: dict[int, list[str]] = {}
-
-    def issue_labels(self, repo: str, issue: int) -> list[str]:
-        return self.labels.get(issue, [])
-
-    def issue_body(self, repo: str, issue: int) -> str:
-        return self.bodies.get(issue, "")
-
-    def issue_comments(self, repo: str, number: int) -> list[dict]:
-        return self.comments.get(number, [])
-
-    def pr_head_sha(self, repo: str, pr: int) -> str:
-        return self.head_shas.get(pr, "")
-
-    def pr_diff(self, repo: str, pr: int) -> str:
-        return self.diffs.get(pr, "")
-
-    def pr_changed_files(self, repo: str, pr: int) -> list[str]:
-        return self.changed_files.get(pr, [])
 
 
 def _check(condition: bool, label: str, failed: list) -> None:

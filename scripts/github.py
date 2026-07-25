@@ -105,8 +105,7 @@ class GhCliReader:
         return data.get("body", "") or ""
 
     def issue_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
-        # PR and issue comments share the REST endpoint
-        # ``/repos/{repo}/issues/{n}/comments``; one method covers both.
+        # The issues endpoint covers PR comments too (see GitHubReader docs);
         # ``--paginate`` hides paging — callers never want a partial thread.
         out = _run_gh([
             "gh", "api", f"repos/{repo}/issues/{number}/comments", "--paginate",
