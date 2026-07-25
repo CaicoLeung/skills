@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-23
 - **Supersedes:** —
+- **Amended by:** [ADR-0009](./0009-question-numbering-convention.md) (adds the optional `asks-user-questions` boolean field, bare-boolean scalar coercion in the parser, and its body-reference rule)
 
 ## Context
 
@@ -33,7 +34,11 @@ YAML frontmatter block pinned to five fields:
 | `requires`    | list of strings   | named inputs the skill consumes (may be empty `[]`)             |
 | `produces`    | list of strings   | named outputs the skill emits (may be empty `[]`)               |
 
-All five are **required**. Unknown fields are rejected (the schema is closed).
+All five are **required**. A sixth field, `asks-user-questions`, is **optional**
+(added by [ADR-0009](./0009-question-numbering-convention.md); asserted
+`true` by skills that interview the user, in which case the body must reference
+the question-numbering convention). Unknown fields are rejected — the schema
+is closed at six fields.
 
 The grammar is intentionally a restricted YAML subset — top-level
 `key: scalar` pairs, indented `- item` block sequences, and inline flow

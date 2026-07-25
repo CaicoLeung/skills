@@ -46,6 +46,7 @@ if __package__ in (None, ""):
 
 import closeout  # noqa: E402
 import routing  # noqa: E402
+import skills  # noqa: E402
 
 # --- Loop actions -----------------------------------------------------------
 # The loop's view of a turn reuses the routing module's action vocabulary —
@@ -84,6 +85,10 @@ class Turn:
             loop ensures its body carries ``Fixes #N``.
         pr_body: The canonical PR body (carrying ``Fixes #N``) when
             ``opens_pr``; otherwise ``None``.
+        ticket_type: The dispatched type (``research`` / ``prototype`` /
+            ``grilling`` / ``task``) when ``action == ACTION_DISPATCH``, else
+            ``None``. Carried so prompt-building can key on the type axis
+            (ADR-0008 §2) rather than re-deriving it from the skill name.
     """
 
     action: str
@@ -91,6 +96,7 @@ class Turn:
     mode: Optional[routing.Mode] = None
     opens_pr: bool = False
     pr_body: Optional[str] = None
+    ticket_type: Optional[routing.TicketType] = None
 
 
 def implement_pr_body(issue_number: int) -> str:
@@ -156,6 +162,7 @@ def plan_turn(labels: Iterable[str], issue_number: int) -> Turn:
         mode=spec.mode,
         opens_pr=opens_pr,
         pr_body=implement_pr_body(issue_number) if opens_pr else None,
+        ticket_type=decision.ticket_type,
     )
 
 
@@ -192,13 +199,30 @@ def implement_prompt(issue_number: int, pr_body: str) -> str:
     )
 
 
-def dispatch_prompt(skill: str, issue_number: int) -> str:
+def dispatch_prompt(skill: str, issue_number: int, ticket_type: Optional[routing.TicketType] = None) -> str:
     """The prompt the loop hands to a non-task dispatched skill.
 
     ``task`` uses :func:`implement_prompt` (it opens a PR); the other types
-    invoke their skill with a plain pointer to the issue.
+    invoke their skill with a plain pointer to the issue. A ``grilling``
+    dispatch additionally points the external interview skill at the
+    question-numbering convention (ADR-0009) so its HITL interview runs under
+    ``Question N:`` / numbered options / ``Recommended: N.`` form rather than
+    free prose. The branch keys on the ticket type axis (ADR-0008 §2), not on
+    a substring of the skill name — a prompt augmentation, not a new dispatch
+    path.
     """
-    return f"Run {skill} for issue #{issue_number} per its acceptance criteria."
+    base = f"Run {skill} for issue #{issue_number} per its acceptance criteria."
+    if ticket_type == "grilling":
+        return (
+            f"{base}\n\n"
+            f"Conduct the interview under the question-numbering convention "
+            f"({skills.CONVENTION_DOC_REF}): prefix each question with its "
+            f"running number (Question N:), number its options (1. 2. …), and "
+            f"mark the recommended option (Recommended: N. because …). Keep the "
+            f"counter across the whole interview so any past question is "
+            f"referenceable by number."
+        )
+    return base
 
 
 # --- Driver: thin I/O over the pure planner ---------------------------------
@@ -342,7 +366,7 @@ def _turn_command(cfg: DriverConfig, issue_number: int, turn: Turn) -> list[str]
     elif turn.action == ACTION_TRIAGE:
         prompt = triage_prompt(issue_number)
     else:
-        prompt = dispatch_prompt(turn.skill, issue_number)
+        prompt = dispatch_prompt(turn.skill, issue_number, turn.ticket_type)
     return paseo_run_command(cfg, workspace_name(issue_number, turn), prompt)
 
 

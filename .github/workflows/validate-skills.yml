@@ -26,6 +26,8 @@ jobs:
         run: python3 scripts/build-marketplace.py --check
       - name: Run marketplace generator tests
         run: python3 scripts/test_marketplace.py
+      - name: Run skill frontmatter interview-flag tests (ADR-0009)
+        run: python3 scripts/test_skills.py
       - name: Run routing dispatcher tests (ADR-0008)
         run: python3 scripts/test_routing.py
       - name: Run independent-reviewer tests (ADR-0007)
