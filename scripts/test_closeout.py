@@ -25,7 +25,44 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from github import GitHubReader  # noqa: E402
 import closeout  # noqa: E402
+import loop  # noqa: E402
+
+
+class FakeGitHubReader:
+    """In-memory :class:`github.GitHubReader` for driver tests.
+
+    Duplicated small in test_loop.py (the repo's standalone-``_check`` test
+    convention has no shared helpers). Twins the ``runner`` injection: the
+    close-out driver is exercised through its own interface, no network.
+    """
+
+    def __init__(self) -> None:
+        self.labels: dict[int, list[str]] = {}
+        self.bodies: dict[int, str] = {}
+        self.comments: dict[int, list[dict]] = {}
+        self.head_shas: dict[int, str] = {}
+        self.diffs: dict[int, str] = {}
+        self.changed_files: dict[int, list[str]] = {}
+
+    def issue_labels(self, repo: str, issue: int) -> list[str]:
+        return self.labels.get(issue, [])
+
+    def issue_body(self, repo: str, issue: int) -> str:
+        return self.bodies.get(issue, "")
+
+    def issue_comments(self, repo: str, number: int) -> list[dict]:
+        return self.comments.get(number, [])
+
+    def pr_head_sha(self, repo: str, pr: int) -> str:
+        return self.head_shas.get(pr, "")
+
+    def pr_diff(self, repo: str, pr: int) -> str:
+        return self.diffs.get(pr, "")
+
+    def pr_changed_files(self, repo: str, pr: int) -> list[str]:
+        return self.changed_files.get(pr, [])
 
 
 def _check(condition: bool, label: str, failed: list[str]) -> None:
@@ -357,6 +394,87 @@ def main() -> int:
             # The four actions are mutually exclusive in meaning: only PASS merges.
             if d.action == closeout.ACTION_PASS:
                 _check(status == closeout.VERDICT_PASS, "PASS only on a passing verdict", failed)
+
+    # =========================================================================
+    # Driver through the gateway: run_closeout_round composes T3+T1 from fake PR
+    # comments. Previously exercised only via --dry-run with verdict_state/
+    # round_number overrides; with the injected reader the verdict is DERIVED
+    # from fake comments, not supplied — the real close-out path, testable.
+    # =========================================================================
+    print("run_closeout_round through the gateway (fake reader):")
+    _check(
+        isinstance(FakeGitHubReader(), GitHubReader),
+        "FakeGitHubReader must satisfy the GitHubReader Protocol",
+        failed,
+    )
+
+    sha = "deadbeef"
+    cfg_co = loop.DriverConfig(
+        repo="CaicoLeung/skills", reviewer_login="reviewer-bot",
+    )
+
+    # A passing review: every changed file covered, no blocking findings.
+    fake_pass = FakeGitHubReader()
+    fake_pass.head_shas[42] = sha
+    fake_pass.changed_files[42] = ["scripts/x.py"]
+    fake_pass.comments[42] = [{
+        "id": 1,
+        "user": {"login": "reviewer-bot"},
+        "created_at": "2026-07-25T10:00:00Z",
+        "body": (
+            f"<!-- review-verdict-findings sha={sha} -->\n\n"
+            "### Standards\nscripts/x.py: OK\n"
+            "### Spec\nscripts/x.py: OK\n"
+        ),
+    }]
+    rep = loop.run_closeout_round(29, 42, cfg_co, gh=fake_pass, dry_run=True)
+    _check(rep["head_sha"] == sha, "run_closeout_round reads head via the fake", failed)
+    _check(
+        rep["verdict"]["status"] == "pass",
+        f"derived verdict must be pass (got {rep['verdict']['status']})",
+        failed,
+    )
+    _check(
+        rep["decision"]["action"] == "pass",
+        "pass verdict -> PASS decision (auto-merge path)",
+        failed,
+    )
+    _check(
+        any(c[:3] == ["gh", "pr", "merge"] and "--auto" in c for c in rep["commands"]),
+        "PASS via the gateway must still emit the loop-owned auto-merge",
+        failed,
+    )
+
+    # A failing review (HIGH finding) at round 1 -> FIX; the round count is
+    # read from the fake's comments (one reviewer findings comment => round 1).
+    fake_fail = FakeGitHubReader()
+    fake_fail.head_shas[42] = sha
+    fake_fail.changed_files[42] = ["scripts/x.py"]
+    fake_fail.comments[42] = [{
+        "id": 2,
+        "user": {"login": "reviewer-bot"},
+        "created_at": "2026-07-25T11:00:00Z",
+        "body": (
+            f"<!-- review-verdict-findings sha={sha} -->\n\n"
+            "### Standards\n[scripts/x.py:9]: HIGH: null deref\n"
+        ),
+    }]
+    rep_fail = loop.run_closeout_round(29, 42, cfg_co, gh=fake_fail, dry_run=True)
+    _check(
+        rep_fail["verdict"]["status"] == "fail",
+        f"HIGH finding -> fail verdict (got {rep_fail['verdict']['status']})",
+        failed,
+    )
+    _check(
+        rep_fail["decision"]["action"] == "fix",
+        "fail at round 1 -> FIX (findings handed to the implementer)",
+        failed,
+    )
+    _check(
+        rep_fail["round"] == 1,
+        f"round count read from the fake's comments (got {rep_fail['round']})",
+        failed,
+    )
 
     if failed:
         print(f"\n{len(failed)} close-out test(s) failed.", file=sys.stderr)

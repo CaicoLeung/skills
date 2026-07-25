@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,11 +51,6 @@ FINDINGS_MARKER_RE = re.compile(
     r"<!--\s*review-verdict-findings\s+sha=([0-9a-f]{7,40})\s*-->",
     re.IGNORECASE,
 )
-
-# Findings comments are posted as top-level PR comments (issue comments) — a
-# block covering many files, not inline review threads.
-PR_COMMENTS_PATH = "issues/{pr}/comments"
-
 
 @dataclass(frozen=True)
 class SelectedFindings:
@@ -160,49 +154,9 @@ def select_current_findings(
 
 
 # --- GitHub I/O (main only) --------------------------------------------------
-# Kept out of the pure core: it touches ``gh`` / the network and is exercised
-# end-to-end by the live demo, not by unit tests.
-
-
-def _gh(*args: str) -> str:
-    """Run ``gh`` and return stdout; raise with stderr on failure."""
-    proc = subprocess.run(
-        ["gh", *args],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"gh {' '.join(args)} failed (exit {proc.returncode}):\n{proc.stderr}"
-        )
-    return proc.stdout
-
-
-def _gh_json(*args: str) -> Any:
-    """Run ``gh ... --json``-equivalent and parse JSON. Assumes ``-`` jq-free."""
-    import json
-
-    out = _gh(*args)
-    return json.loads(out) if out.strip() else None
-
-
-def _pr_changed_files(repo: str, pr_number: int) -> list[str]:
-    """Return the PR's changed file paths via the GitHub CLI."""
-    data = _gh_json("pr", "view", str(pr_number), "--repo", repo, "--json", "files")
-    files = (data or {}).get("files") or []
-    return [f.get("path") for f in files if f.get("path")]
-
-
-def _pr_issue_comments(repo: str, pr_number: int) -> list[dict[str, Any]]:
-    """Return the PR's top-level (issue) comments via the REST API."""
-    import json
-
-    path = PR_COMMENTS_PATH.format(pr=pr_number)
-    out = _gh("api", f"repos/{repo}/{path}", "--paginate")
-    comments = json.loads(out) if out.strip() else []
-    if not isinstance(comments, list):
-        return []
-    return comments
+# main() reads through the shared gateway (scripts/github.py) — the same
+# transport the loop driver uses — so the ``gh`` command shape lives in one
+# place. The pure selection core above never touches the network.
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -213,6 +167,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
         sys.path.insert(0, here)
+    from github import GhCliReader  # noqa: E402  (shared gh gateway)
     from verdict import derive_verdict  # noqa: E402  (local zero-dep import)
 
     p = argparse.ArgumentParser(
@@ -246,19 +201,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"::error::review-verdict missing required input: {', '.join(missing)}")
         return 2
 
-    comments = _pr_issue_comments(args.repo, args.pr)
-    selected = select_current_findings(comments, args.sha, args.reviewer_login)
-    if selected is None:
-        print(
-            f"::error::No current review: no findings comment from "
-            f"'{args.reviewer_login}' for SHA {args.sha} (stale or missing). "
-            f"A fresh review is required before merge."
-        )
-        return 1
+    reader = GhCliReader()
+    try:
+        comments = reader.issue_comments(args.repo, args.pr)
+        selected = select_current_findings(comments, args.sha, args.reviewer_login)
+        if selected is None:
+            print(
+                f"::error::No current review: no findings comment from "
+                f"'{args.reviewer_login}' for SHA {args.sha} (stale or missing). "
+                f"A fresh review is required before merge."
+            )
+            return 1
 
-    changed = _pr_changed_files(args.repo, args.pr)
+        changed = reader.pr_changed_files(args.repo, args.pr)
 
-    result = derive_verdict(selected.body, changed)
+        result = derive_verdict(selected.body, changed)
+    except RuntimeError as exc:
+        # Single CLI catch (twin of the loop driver's): every gh failure surfaces
+        # as one RuntimeError shape; report it as a CI error and exit non-zero.
+        print(f"::error::review-verdict GitHub read failed: {exc}")
+        return 2
 
     print(
         f"review-verdict: reviewed-SHA={selected.sha} "
