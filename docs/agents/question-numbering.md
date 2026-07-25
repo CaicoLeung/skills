@@ -80,6 +80,13 @@ A bare number (`2`) in plain chat means "option 2 of the most recent question".
 The skill resolves the number against its running counter, then records the
 choice against the numbered question so the final decision log is unambiguous.
 
+Rejecting the recommendation is recorded the same way: if the user picks an
+option other than the recommended one (or writes an explicit rejection), the
+skill records that choice against the question's number. The decision log then
+shows which question got which answer regardless of whether the recommendation
+was accepted — e.g. `Question 7 → option 2 (recommended was 1)` stays
+unambiguous, so a later "forget my response for question 7" still resolves.
+
 ## The structured-tool path
 
 When a skill delegates to the harness's `ask_user_question` tool, the tool's

@@ -13,8 +13,8 @@ clarifying questions — it asks questions in free prose with no ordering and no
 numbered options. The user cannot answer with a bare number, and cannot refer
 back to an earlier question by number ("forget my response for question 7 —
 ask me again"). The interaction is slower and harder to track than it needs to
-be, especially in long decision interviews. (Origin: issue #45 feature request;
-research: `docs/research/issue-45-numbered-questions.md`.)
+be, especially in long decision interviews. (Origin: issue #45 feature
+request; spec: issue #50.)
 
 The repo already has the machinery to encode and enforce a convention: a closed
 frontmatter contract ([ADR-0002](./0002-skill-frontmatter-contract.md)) with a

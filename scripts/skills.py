@@ -181,7 +181,7 @@ def _unquote(val: str) -> str:
     return val
 
 
-def _to_scalar(val: str):
+def _to_scalar(val: str) -> bool | str:
     """Coerce a parsed bare scalar into its Python value.
 
     Part of the restricted frontmatter subset: bare YAML core-schema booleans
@@ -198,7 +198,7 @@ def _to_scalar(val: str):
     return val
 
 
-def _assign_scalar(val: str):
+def _assign_scalar(val: str) -> bool | str:
     """Coerce a top-level scalar field value, respecting YAML quote semantics.
 
     A quoted value (matching single/double quotes) is always a string, so
@@ -237,19 +237,39 @@ def _parse_flow(val: str) -> list:
     return items
 
 
-def parse_frontmatter(text: str):
-    """Return (meta_dict, error_or_None). meta is {} on a hard parse failure."""
-    # Accept CRLF and LF; treat leading BOM defensively.
+def _strip_bom_and_split(text: str) -> list[str]:
+    """Strip a leading BOM and split into lines (shared frontmatter prep).
+
+    Accepts CRLF and LF; the leading U+FEFF is removed defensively so an editor
+    BOM does not hide the opening ``---`` fence.
+    """
     if text.startswith("\ufeff"):
         text = text[1:]
-    lines = text.splitlines()
+    return text.splitlines()
+
+
+def _frontmatter_close_index(lines: list[str]) -> int | None:
+    """Index of the closing ``---`` fence, or ``None`` when there is none.
+
+    Expects BOM-stripped lines (see :func:`_strip_bom_and_split`). Returns
+    ``None`` if there is no opening ``---`` or no closing ``---``. Shared by
+    :func:`parse_frontmatter` (which maps the missing cases to specific errors)
+    and :func:`_body_after_frontmatter` (which treats any failure as "no body").
+    """
     if not lines or lines[0].strip() != "---":
-        return {}, "must start with a '---' frontmatter fence"
-    end = None
+        return None
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
-            end = i
-            break
+            return i
+    return None
+
+
+def parse_frontmatter(text: str):
+    """Return (meta_dict, error_or_None). meta is {} on a hard parse failure."""
+    lines = _strip_bom_and_split(text)
+    if not lines or lines[0].strip() != "---":
+        return {}, "must start with a '---' frontmatter fence"
+    end = _frontmatter_close_index(lines)
     if end is None:
         return {}, "frontmatter is not closed with a '---' fence"
     if end == 1:
@@ -302,16 +322,8 @@ def _body_after_frontmatter(text: str) -> str:
     an empty string when the frontmatter is missing or malformed (a hard parse
     failure already wins, so the body check is moot).
     """
-    if text.startswith("\ufeff"):
-        text = text[1:]
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return ""
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
+    lines = _strip_bom_and_split(text)
+    end = _frontmatter_close_index(lines)
     if end is None:
         return ""
     return "\n".join(lines[end + 1:])

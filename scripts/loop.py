@@ -46,6 +46,7 @@ if __package__ in (None, ""):
 
 import closeout  # noqa: E402
 import routing  # noqa: E402
+import skills  # noqa: E402
 
 # --- Loop actions -----------------------------------------------------------
 # The loop's view of a turn reuses the routing module's action vocabulary —
@@ -198,13 +199,7 @@ def implement_prompt(issue_number: int, pr_body: str) -> str:
     )
 
 
-# The convention the loop points an interview skill at when it dispatches a
-# grilling ticket (ADR-0009). Kept as a path reference (not the tool's package
-# name) so it survives backing-package swaps.
-NUMBERING_CONVENTION_REF = "docs/agents/question-numbering.md"
-
-
-def dispatch_prompt(skill: str, issue_number: int, ticket_type: Optional[str] = None) -> str:
+def dispatch_prompt(skill: str, issue_number: int, ticket_type: Optional[routing.TicketType] = None) -> str:
     """The prompt the loop hands to a non-task dispatched skill.
 
     ``task`` uses :func:`implement_prompt` (it opens a PR); the other types
@@ -221,7 +216,7 @@ def dispatch_prompt(skill: str, issue_number: int, ticket_type: Optional[str] = 
         return (
             f"{base}\n\n"
             f"Conduct the interview under the question-numbering convention "
-            f"({NUMBERING_CONVENTION_REF}): prefix each question with its "
+            f"({skills.CONVENTION_DOC_REF}): prefix each question with its "
             f"running number (Question N:), number its options (1. 2. …), and "
             f"mark the recommended option (Recommended: N. because …). Keep the "
             f"counter across the whole interview so any past question is "
