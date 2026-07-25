@@ -111,7 +111,7 @@ the ADR-0006 pattern. It does not auto-close on stuck (only `wontfix` /
   supervisor agent).
 - T5b (issue #29) — the close-out half: `scripts/closeout.py` (pure planner —
   `plan_closeout`, `VerdictState`, `CloseoutDecision`, `fix_prompt`,
-  `resolution_comment`, `stuck_message`, `closeout_commands`) +
+  `resolution_comment`, `stuck_message`, `closeout_plan`) +
   `scripts/test_closeout.py`; the `run_closeout_round` / `run_closeout_trajectory`
   driver + `closeout` CLI subcommand in `scripts/loop.py`; the demo in
   `docs/agents/closeout.md`. The 3-round STUCK_REVIEW cap, the verbatim

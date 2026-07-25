@@ -167,5 +167,7 @@ merge.
   `GhCliReader` + the single CLI catch).
 - New tests: `FakeGitHubReader` + driver coverage in `scripts/test_loop.py`
   and `scripts/test_closeout.py`.
-- No change to writes: `closeout.closeout_commands`, the `runner` injection,
-  and the dry-run contract are unchanged.
+- No change to writes: the close-out command-list builders (then `closeout.closeout_commands`;
+  issue #52 later renamed it `closeout_plan` to return intent, with the driver
+  building the command list — the write-stays-command-data principle this ADR
+  argues for is unchanged), the `runner` injection, and the dry-run contract.
