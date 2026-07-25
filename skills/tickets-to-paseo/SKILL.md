@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
 description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor)."
-version: 0.6.0
+version: 0.7.0
 requires:
   - project
   - tickets
@@ -176,53 +176,127 @@ paseo worktree create "$workspace_name" --base "$base_branch"
 
 ---
 
-### SUPERVISE → Supervisor Agent via `gh` CLI + Chat Room
+### SUPERVISE → `loop.py supervise` driven by `paseo loop` / `paseo schedule` + Chat Room + `paseo send`
 
-Core's `SUPERVISE` primitive maps to a supervisor agent that polls PR/CI state via GitHub CLI, posts completion/stuck-subgraph signals to the workflow chat room, isolates blocked tasks so independent tickets proceed.
+Core's `SUPERVISE` primitive maps to a long-lived supervisor surface that
+observes each task's gate (`gh pr view --json mergeStateStatus` + the commit's
+status contexts), classifies deviations via the triage state machine
+(`scripts/supervise.py: plan_supervise`), and either **re-dispatches the leaf
+agent** (`paseo send` with the specific failure) or **posts an `ESCALATE`
+signal** a human consumes. Completion is merged-and-gated only.
 
 **Implementation shape:**
 
-1. **Supervisor agent lifecycle:** Created after all leaf agents, runs in dedicated supervisor workspace. Receives dependency graph from workflow plan.
-
-2. **Poll PR state:**
+1. **Supervisor lifecycle:** A `paseo loop` (preferred) or a `paseo schedule`
+   re-invokes the supervisor's planner once per poll interval. Each invocation
+   is a thin, idempotent I/O step — read the gate, decide, act — exactly as
+   the routing and close-out drivers drive one turn. The supervisor's state
+   (per-task `retries_used`, `signal_elapsed_sec`) lives in the workflow chat
+   room's history or a workflow-state file, not in the daemon.
    ```bash
-   gh pr view "$pr_number" --json state,mergeable,mergedAt,headRefOid -q '.state'
+   paseo loop --every 60s \
+     "python3 scripts/loop.py supervise $issue --pr $pr --task-id $taskId \
+        --chat-room wf-$workflowId --leaf-agent $leafAgentId \
+        --signal-elapsed-sec $(( $(date +%s) - $agentFinishedAt )) \
+        --retries-used $retriesUsed"
    ```
+   The `paseo loop` / `paseo schedule` choice is operational — both
+   re-invoke; `paseo loop` is the closer fit for a per-task watcher.
 
-3. **Poll CI status:**
+2. **Observe gate state** (the supervisor reads platform state, never agent
+   internals):
    ```bash
-   gh api "repos/OWNER/REPO/commits/$commit_sha/status" \
+   # PR merge state — state, mergeStateStatus, mergedAt, headRefOid
+   gh pr view "$pr_number" --json state,mergeStateStatus,mergedAt,headRefOid
+
+   # Required check's status — absence-of-signal if the context never appears
+   gh api "repos/OWNER/REPO/commits/$headRefOid/status" \
      --jq '.statuses[] | select(.context=="validate-skills") | .state'
    ```
+   These two reads compose into a `supervise.GateState` (`scripts/loop.py:
+   read_gate_state`). A check that has not appeared in the status list within
+   `signal_deadline_sec` is `check_missing` — the absence-of-signal deviation.
 
-4. **Completion condition:**
-   - PR state = `MERGED`
-   - CI check = `success`
-   - Once met, post to chat room:
-     ```bash
-     paseo chat post "wf-$workflowId" \
-       "DONE task_$taskId pr=$pr_url merged_at=$timestamp"
-     ```
+3. **Triage** (`supervise.plan_supervise` — pure, total, unit-tested):
+   - **COMPLETE** (`pr_state=MERGED` AND `check_state=success`) → post the
+     completion signal. Dependents filter on `DONE task_$id pr=`.
+   - **WAIT** (no deviation, deadline not crossed) → no command; observe
+     again next interval.
+   - **REDISPATCH** (mechanical/transient, retries remain) → `paseo send`
+     the leaf with the specific failure (below).
+   - **ESCALATE** (genuine/ambiguous, OR retries exhausted) → post the
+     `ESCALATE` signal (below).
 
-5. **Bounded triage window:**
-   - Poll every `interval_sec` (default 60s)
-   - If not merged-and-gated within `max_wait_sec` (default 3600s):
-     - **Compute transitive closure:** Walk dependency graph to find all tasks that (directly or indirectly) depend on the stuck blocker.
-     - **Scoped escalation:** Post to chat room:
-       ```bash
-       paseo chat post "wf-$workflowId" \
-         "STUCK_SUBGRAPH blocker=$taskId blocked=[$dependentIds...] pr=$pr_url reason=timeout_after_${max_wait_sec}s"
-       ```
-   - Independent tasks (not in `blocked` list) ignore this signal and proceed.
-   - Continue polling; human fix allows gate to proceed.
+4. **Completion signal** (supervisor → chat room):
+   ```bash
+   paseo chat post "wf-$workflowId" \
+     "DONE task_$taskId pr=$pr_url merged_at=$timestamp"
+   ```
+   Dependents wait on this exact token (`paseo chat wait` has no `--filter`
+   in 0.1.110 — filter client-side, anchored on `DONE task_$id pr=` so
+   `task_1` does not substring-match `task_10`, and the wait resolves only on
+   the supervisor's merged-and-gated signal, not the leaf's agent-finished
+   `DONE task_$id`).
 
-6. **Completion semantics:** Dependents unblock on supervisor's `DONE task_$taskId pr=...` signal, not agent's `DONE task_$taskId`. Supervisor posts only after merged-and-gated.
+5. **Redispatch action** (mechanical/transient — `paseo send` to the leaf):
+   ```bash
+   # The leaf keeps its implement-turn workspace; send hands it the failure.
+   paseo send --agent "$leafAgentId" --worktree "$leafWorkspace" \
+     --base "$base_branch" --detach \
+     "SUPERVISE re-dispatch for $taskId ($pr_url). <specific deviation detail>"
+   ```
+   The detail is the supervisor's observation verbatim — e.g. *"Required
+   check `validate-skills` has not reported within the 300s deadline; confirm
+   the workflow that emits that context still exists"* (the check-name-drift
+   pattern), or *"GitHub reports mergeStateStatus=DIRTY; rebase onto the base
+   branch"*. **No "fix all issues" prose** — a summary is exactly where a
+   leaf could quietly decide not to investigate. The leaf pushes to the same
+   branch; the supervisor re-observes the gate on its next interval. A
+   deviation is "resolved" only when it disappears from the NEXT observation,
+   never by the leaf's self-declaration.
 
-**Subgraph isolation mapping:** Paseo 0.1.110 has no daemon-level dependency edges. The supervisor computes the blocked subgraph from the dependency graph passed at workflow generation and posts a scoped escalation to the chat room. Dependent tasks filter for their blocker in the `blocked` list; independent tasks proceed without waiting.
+6. **Escalation signal** (genuine/ambiguous, OR retries exhausted — chat room
+   + durable issue comment):
+   ```bash
+   paseo chat post "wf-$workflowId" \
+     "ESCALATE task=$taskId pr=$pr_url deviation=$deviation blocked=[$dependentIds...] reason=$reason"
+   gh issue comment "$issue" --repo "$repo" --body \
+     "ESCALATE task=$taskId pr=$pr_url deviation=$deviation blocked=[$dependentIds...] reason=$reason"
+   ```
+   The chat room is the immediate signal; the issue comment is the durable
+   one (the chat room scrolls, the issue stays). A human must intervene; the
+   supervisor does NOT auto-close.
 
-**Gap documentation:** Paseo 0.1.110 has no daemon supervisor. Adapter implements supervisor as a long-running agent that polls GitHub API. This is correct pattern — polling *gate state* ≠ polling *agent internals*. See ADR-0006.
+**Bounded retry budget mapping.** `MAX_GATE_RETRIES=2` (default). A
+mechanical/transient deviation that does not converge after two redispatches
+auto-escalates — the cap is the never-wait-forever guarantee. Genuine
+(`merge_blocked`) and ambiguous (unrecognized state) deviations escalate at
+any retry count. The driver advances `retries_used` per executed REDISPATCH.
 
----
+**Absence-of-signal mapping.** A required check that has not reported within
+`signal_deadline_sec` (default 300s) is `check_missing` (mechanical), not a
+silent wait. This is the exact `wf-skills-1` stall: the workflow was renamed
+so the required check never appeared, the leaf went idle, nothing detected
+it. The supervisor's per-poll composition (`commit_status_contexts` +
+`signal_elapsed_sec` vs `signal_deadline_sec`) detects it and redispatches
+the leaf within bounded time.
+
+**Subgraph isolation mapping.** Paseo 0.1.110 has no daemon-level dependency
+edges. The supervisor computes the blocked subgraph from the dependency graph
+passed at workflow generation and includes it in the `ESCALATE` signal's
+`blocked=[...]`. Dependent tasks filter for their blocker in that list;
+independent tasks proceed without waiting.
+
+**Completion semantics.** Dependents unblock on the supervisor's
+`DONE task_$taskId pr=...` signal, NOT on the leaf's `DONE task_$taskId`.
+The supervisor posts it only after merged-and-gated (PR merged AND required
+check `success`).
+
+**Gap documentation.** Paseo 0.1.110 has no daemon supervisor and no
+`notifyOnMerge` edge. The adapter implements the supervisor as a `paseo loop`
+re-invoking a stateless planner that observes the GitHub API. This is the
+correct pattern — polling *gate state* ≠ polling *agent internals* (see
+ADR-0006 §4 for the honest reconciliation of the "don't poll" guidance).
 
 ## Inputs
 
@@ -318,7 +392,7 @@ Never restart daemon without explicit user approval — it kills all running age
 | `DEPENDS_ON` with `notifyOnFinish` edge | **Does not exist** | Chat room handoff (`paseo chat post / wait`) |
 | `FAILOVER` with live model-switch | **Does not exist** (`update_agent` only metadata) | New agents switch; in-flight agents stay on original model |
 | `GATE` as daemon gate | **Does not exist** | Independent reviewer (loop-invoked, secondary model, separate worktree, App identity) + `review-verdict` CI (T3) + GitHub branch protection |
-| `SUPERVISE` as daemon supervisor | **Does not exist** | Long-running supervisor agent polls GitHub API, posts to chat room |
+| `SUPERVISE` as daemon supervisor | **Does not exist** | `paseo loop` / `paseo schedule` re-invokes `loop.py supervise` (stateless planner in `supervise.py`); observes gate state via `gh`, redispatches leaf via `paseo send`, posts DONE/ESCALATE to chat room + issue |
 
 Adding a second runtime (e.g., OpenAI, non-Paseo) is a **new adapter file** that consumes the same core workflow plan and maps primitives to its surface. No core changes required.
 
@@ -339,6 +413,7 @@ Generated workflow must:
 
 ## Version Change
 
+0.7.0: SUPERVISE mapping concretized (ADR-0006 §T1 / issue #11). Replaces the timeout-only escalation with an explicit **triage state machine**: mechanical/transient deviations (check name drifted, needs rebase, flaky test) → redispatch the SAME leaf via `paseo send` with the specific failure, bounded by `MAX_GATE_RETRIES=2`; genuine/ambiguous deviations (unsatisfiable branch protection, unknown state) → `ESCALATE` signal at any retry count. **Absence-of-signal** is a first-class deviation: a required check that has not reported within `signal_deadline_sec` (default 300s) is `check_missing`, not a silent wait — this is the exact `wf-skills-1` stall (renamed workflow → check never appeared). Drives `loop.py supervise` (`run_supervise_round`, `run_supervise_trajectory`); pure planner in `scripts/supervise.py`.
 0.6.0: GATE mapping changed from self-declared `VERDICT pass|fail` prompt contract to an **independent reviewer** the loop invokes (ADR-0007): loop-invoked, fixed system-authored prompt (`review-prompt.md`) via `scripts/reviewer.py`, secondary model on a different provider, separate worktree, diff+spec input only, findings posted from a dedicated GitHub-App identity. Reviewer emits findings only; verdict is derived. Merge authority moved to the loop (not the implementer).
 0.5.1: Fixed DEPENDS_ON wait — `paseo chat wait` (0.1.110) has no `--filter`; dependents now filter client-side (`chat read` + `grep`) anchored on `task_<id> pr=`, so `task_1` no longer matches `task_10` and the wait resolves only on the supervisor's merged-and-gated signal, not agent-finished.
 0.5.0: Added subgraph scoping to SUPERVISE — when a blocker is stuck, only its transitive dependents are blocked; independent tasks proceed. Supervisor computes blocked subgraph from dependency graph and posts scoped escalation.

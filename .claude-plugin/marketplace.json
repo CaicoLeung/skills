@@ -10,8 +10,8 @@
     {
       "name": "loop-engineering",
       "source": "./skills/loop-engineering",
-      "description": "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch) and the close-out loop (review → derived verdict → fix → merge → close) and invokes external doing-skills as leaves (ADR-0008).",
-      "version": "0.2.0",
+      "description": "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch), the close-out loop (review → derived verdict → fix → merge → close), and the supervisor (triage → redispatch/escalate → merged-and-gated) and invokes external doing-skills as leaves (ADR-0008).",
+      "version": "0.3.0",
       "strict": false,
       "skills": [
         "./"
@@ -21,7 +21,7 @@
       "name": "ticket-workflow-core",
       "source": "./skills/ticket-workflow-core",
       "description": "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision.",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "strict": false,
       "skills": [
         "./"
@@ -31,7 +31,7 @@
       "name": "tickets-to-paseo",
       "source": "./skills/tickets-to-paseo",
       "description": "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor).",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "strict": false,
       "skills": [
         "./"

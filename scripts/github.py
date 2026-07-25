@@ -36,17 +36,24 @@ from typing import Any, Protocol, Sequence, runtime_checkable
 
 @runtime_checkable
 class GitHubReader(Protocol):
-    """Read-only GitHub surface — the six ops the loop + CI check need.
+    """Read-only GitHub surface — the ops the loop, the CI check, and the
+    supervisor need.
 
     Repo-first param order throughout. Returns raw primitives (``list[str]``,
     ``str``, ``list[dict]``); the typed parsing (``Finding``,
-    ``SelectedFindings``) stays where it earns its keep, in :mod:`verdict` /
-    :mod:`review_verdict`. The gateway is transport, not a data model.
+    ``SelectedFindings``, :class:`supervise.GateState`) stays where it earns
+    its keep, in :mod:`verdict` / :mod:`review_verdict` / :mod:`loop`. The
+    gateway is transport, not a data model.
 
     ``issue_comments`` serves both PR and issue comments — they share the REST
     endpoint (``/repos/{repo}/issues/{n}/comments``), so one method covers
     both. Pagination is hidden inside it (``--paginate``): callers never want a
     partial comment thread.
+
+    Supervisor reads (ADR-0006): ``pr_merge_state`` and
+    ``commit_status_contexts`` are the gate-state surface the supervisor
+    observes. They are **platform state**, not agent internals — the
+    "don't poll agents" guidance never applied to them (ADR-0006 §4).
     """
 
     def issue_labels(self, repo: str, issue: int) -> list[str]: ...
@@ -55,6 +62,8 @@ class GitHubReader(Protocol):
     def pr_head_sha(self, repo: str, pr: int) -> str: ...
     def pr_diff(self, repo: str, pr: int) -> str: ...
     def pr_changed_files(self, repo: str, pr: int) -> list[str]: ...
+    def pr_merge_state(self, repo: str, pr: int) -> dict[str, Any]: ...
+    def commit_status_contexts(self, repo: str, sha: str) -> list[dict[str, Any]]: ...
 
 
 def _run_gh(argv: Sequence[str]) -> str:
@@ -133,3 +142,50 @@ class GhCliReader:
         data = json.loads(out) if out.strip() else {}
         files = data.get("files") or []
         return [f.get("path") for f in files if f.get("path")]
+
+    def pr_merge_state(self, repo: str, pr: int) -> dict[str, Any]:
+        """Fetch the PR's merge-state fields the supervisor watches (ADR-0006).
+
+        Returns the four fields the supervisor's gate observation needs:
+        ``state`` (``OPEN`` | ``MERGED`` | ``CLOSED``), ``mergeStateStatus``
+        (``UNKNOWN`` | ``BEHIND`` | ``BLOCKED`` | ``CLEAN`` | ``DIRTY`` |
+        ``HAS_HOOKS``), ``mergedAt`` (ISO timestamp or ``""``), and
+        ``headRefOid`` (the head SHA — the supervisor needs it to fetch the
+        commit's status contexts in a follow-up call).
+
+        ``gh pr view --json`` is the GitHub CLI's stable projection; it hides
+        the GraphQL/REST split. Failure modes match the rest of the gateway:
+        ``gh`` missing or non-zero raises ``RuntimeError``.
+        """
+        out = _run_gh([
+            "gh", "pr", "view", str(pr),
+            "--repo", repo,
+            "--json", "state,mergeStateStatus,mergedAt,headRefOid",
+        ])
+        data = json.loads(out) if out.strip() else {}
+        return {
+            "state": data.get("state", "") or "",
+            "mergeStateStatus": data.get("mergeStateStatus", "") or "",
+            "mergedAt": data.get("mergedAt", "") or "",
+            "headRefOid": data.get("headRefOid", "") or "",
+        }
+
+    def commit_status_contexts(self, repo: str, sha: str) -> list[dict[str, Any]]:
+        """Fetch the per-context status list for a commit (ADR-0006 supervisor).
+
+        Backs the supervisor's absence-of-signal detector: the required check
+        is "seen" iff a context with that name appears in this list. The combined
+        state is NOT used — the supervisor matches the required context by name
+        and reads its individual ``state`` (``success`` | ``failure`` |
+        ``error`` | ``pending``). Returns ``[]`` when no statuses have reported
+        yet (the absence case the detector fires on).
+        """
+        out = _run_gh([
+            "gh", "api", f"repos/{repo}/commits/{sha}/status",
+        ])
+        stripped = out.strip()
+        if not stripped:
+            return []
+        data = json.loads(stripped)
+        statuses = data.get("statuses") if isinstance(data, dict) else None
+        return list(statuses) if isinstance(statuses, list) else []
