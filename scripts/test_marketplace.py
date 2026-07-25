@@ -8,6 +8,7 @@ plugin), drift detection (--check), and byte-stable regeneration.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 import tempfile
@@ -15,6 +16,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skills  # noqa: E402
+
+
+@contextlib.contextmanager
+def _setup_tmp():
+    """Create a temporary directory with an empty skills/ subdirectory."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        skills_root = tmp / "skills"
+        skills_root.mkdir()
+        yield tmp, skills_root
 
 
 def _make_skill(dir_path: Path, name: str, description: str, version: str) -> Path:
@@ -39,6 +50,7 @@ def _write_config(path: Path, name="test-marketplace", owner_name="tester",
         "name": name,
         "owner": {"name": owner_name},
         "metadata": {"description": desc},
+        "plugin_defaults": {"strict": False, "skills": ["./"]},
     }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -47,10 +59,7 @@ def main() -> int:
 
     # --- Derive path: config + frontmatter → plugin entries -------------------
     print("derive path:")
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        skills_root = tmp / "skills"
-        skills_root.mkdir()
+    with _setup_tmp() as (tmp, skills_root):
         _make_skill(skills_root, "alpha-skill", "First skill.", "1.0.0")
         _make_skill(skills_root, "beta-skill", "Second skill.", "2.0.0")
 
@@ -102,10 +111,7 @@ def main() -> int:
 
     # --- Drift detection: --check fails when committed differs ----------------
     print("drift detection (--check):")
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        skills_root = tmp / "skills"
-        skills_root.mkdir()
+    with _setup_tmp() as (tmp, skills_root):
         _make_skill(skills_root, "alpha-skill", "First skill.", "1.0.0")
 
         config_path = tmp / "config.json"
@@ -150,10 +156,7 @@ def main() -> int:
 
     # --- Stable regeneration: byte-identical output --------------------------
     print("stable regeneration:")
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        skills_root = tmp / "skills"
-        skills_root.mkdir()
+    with _setup_tmp() as (tmp, skills_root):
         _make_skill(skills_root, "alpha-skill", "First skill.", "1.0.0")
 
         config_path = tmp / "config.json"
@@ -178,10 +181,7 @@ def main() -> int:
 
     # --- Config validation: missing required keys ----------------------------
     print("config validation:")
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        skills_root = tmp / "skills"
-        skills_root.mkdir()
+    with _setup_tmp() as (tmp, skills_root):
         _make_skill(skills_root, "alpha-skill", "First skill.", "1.0.0")
 
         for missing_key, test_config in [
@@ -213,6 +213,19 @@ def main() -> int:
                 print(f"  FAIL missing metadata.description exited {exc.code}, expected 2")
                 failed += 1
 
+        # Missing owner.name.
+        config_path.write_text(json.dumps({
+            "name": "n", "owner": {}, "metadata": {"description": "d"},
+        }), encoding="utf-8")
+        try:
+            skills._load_marketplace_config(config_path)
+            print("  FAIL should exit on missing owner.name")
+            failed += 1
+        except SystemExit as exc:
+            if exc.code != 2:
+                print(f"  FAIL missing owner.name exited {exc.code}, expected 2")
+                failed += 1
+
         # Missing config file.
         try:
             skills._load_marketplace_config(tmp / "nonexistent.json")
@@ -225,10 +238,8 @@ def main() -> int:
 
     # --- Empty skills → empty plugins list (still valid marketplace) ----------
     print("empty skills:")
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        skills_root = tmp / "skills"
-        skills_root.mkdir()  # No skills — empty directory.
+    with _setup_tmp() as (tmp, skills_root):
+        # No skills created — empty directory.
 
         config_path = tmp / "config.json"
         _write_config(config_path)

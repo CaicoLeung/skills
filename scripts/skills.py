@@ -401,40 +401,48 @@ def cmd_index(args) -> int:
 # --- Marketplace JSON generation (ADR-0002 frontmatter → plugin entries) ----
 
 
+def _fatal(msg: str) -> None:
+    """Print error to stderr and exit with code 2."""
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
 def _load_marketplace_config(config_path: Path) -> dict:
     """Load marketplace-level config or exit with a clear error."""
     if not config_path.exists():
-        print(f"error: marketplace config not found: {config_path}", file=sys.stderr)
-        sys.exit(2)
+        _fatal(f"error: marketplace config not found: {config_path}")
     try:
         with open(config_path, encoding="utf-8") as fh:
             config = json.load(fh)
     except json.JSONDecodeError as exc:
-        print(f"error: invalid JSON in {config_path}: {exc}", file=sys.stderr)
-        sys.exit(2)
+        _fatal(f"error: invalid JSON in {config_path}: {exc}")
     for key in ("name", "owner", "metadata"):
         if key not in config:
-            print(f"error: {config_path} missing required key '{key}'", file=sys.stderr)
-            sys.exit(2)
+            _fatal(f"error: {config_path} missing required key '{key}'")
+    owner = config.get("owner", {})
+    if not isinstance(owner, dict) or not owner.get("name"):
+        _fatal(f"error: {config_path} owner.name is required")
     if "description" not in config.get("metadata", {}):
-        print(f"error: {config_path} metadata.description is required", file=sys.stderr)
-        sys.exit(2)
+        _fatal(f"error: {config_path} metadata.description is required")
     return config
 
 
 def render_marketplace(skills_root: Path, config: dict) -> str:
     """Generate marketplace.json from config + conforming skills' frontmatter."""
     skills = [s for s in discover(skills_root) if not s.errors]
+    defaults = config.get("plugin_defaults", {})
+    strict = defaults.get("strict", False)
+    skills_val = defaults.get("skills", ["./"])
     plugins = []
     for s in skills:
         m = s.meta
         plugins.append({
             "name": m["name"],
-            "source": f"./skills/{s.dir}",
+            "source": f"./skills/{m['name']}",
             "description": m["description"],
             "version": m["version"],
-            "strict": False,
-            "skills": ["./"],
+            "strict": strict,
+            "skills": skills_val,
         })
     # Sort plugins by name for deterministic output.
     plugins.sort(key=lambda p: p["name"])

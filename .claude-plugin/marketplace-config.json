@@ -5,5 +5,9 @@
   },
   "metadata": {
     "description": "Loop Engineering skills — a fork of mattpocock/skills carrying only the ticket-driven loop core, Paseo adapter, and deterministic driver (ADR-0001)."
+  },
+  "plugin_defaults": {
+    "strict": false,
+    "skills": ["./"]
   }
 }
