@@ -39,9 +39,13 @@ independent reviewer — do not defeat it by inventing context.
    must appear exactly once, as either a finding or an explicit `OK`. A file
    you are silent on fails the review.
 4. **Exact line shapes** — the verdict script matches these and nothing else:
-   - Finding: `[file:line]: SEVERITY: one-line summary`
-   - Clean file: `file: OK`
-   - `SEVERITY` is exactly one of `CRITICAL | HIGH | MEDIUM | LOW`.
+
+   ```
+   [file:line]: SEVERITY: one-line summary
+   file: OK
+   ```
+
+   `SEVERITY` is exactly one of `CRITICAL | HIGH | MEDIUM | LOW`.
 
 ## Severity (tag accurately — do not game the threshold)
 
