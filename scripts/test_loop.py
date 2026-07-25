@@ -261,6 +261,11 @@ def main() -> int:
         failed,
     )
     _check(
+        "issue-29-implement" in fix_run,
+        "FIX must run in the implementer's worktree (same agent fixes)",
+        failed,
+    )
+    _check(
         FINDINGS in fix_run[-1],
         "FIX enrichment prompt carries the findings verbatim",
         failed,

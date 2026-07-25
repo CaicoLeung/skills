@@ -604,6 +604,40 @@ def review_round_count(
     return rounds
 
 
+def _intent_to_paseo_run(
+    cfg: DriverConfig,
+    intent: closeout.RunIntent,
+    issue_number: int,
+    *,
+    prompt: Optional[str] = None,
+) -> list[str]:
+    """Shape a ``paseo run`` from a REVIEW/FIX :class:`closeout.RunIntent`.
+
+    The single source of truth for the close-out ``paseo run`` shape (issue
+    #52) — the live driver (:func:`closeout_decision_commands`) and the
+    trajectory sim (:func:`run_closeout_trajectory`) both route through this,
+    so the pure builder (:func:`closeout.closeout_plan`) never builds a
+    ``paseo run`` itself. The workspace is derived from the intent kind
+    (reviewer vs implementer); the provider/model from cfg (secondary for
+    REVIEW, primary for FIX); the base from cfg. ``prompt`` overrides the
+    intent's placeholder (the driver injects the live review prompt); when
+    ``None`` the intent's own prompt is used (the verbatim findings for FIX,
+    the placeholder for the sim's REVIEW).
+    """
+    if intent.kind == closeout.ACTION_REVIEW:
+        provider, model = cfg.secondary_provider, cfg.secondary_model
+        workspace = review_worktree_name(issue_number)
+    else:
+        provider, model = cfg.provider, cfg.model
+        workspace = implement_worktree_name(issue_number)
+    return _paseo_run(
+        provider=provider, model=model, mode=cfg.mode,
+        workspace=workspace, base=cfg.base_branch,
+        prompt=prompt if prompt is not None else intent.prompt,
+        extra=cfg.extra_run_args,
+    )
+
+
 def closeout_decision_commands(
     cfg: DriverConfig,
     decision: closeout.CloseoutDecision,
@@ -614,60 +648,43 @@ def closeout_decision_commands(
 ) -> list[list[str]]:
     """The shell command(s) for a close-out decision, enriched for live review.
 
-    Wraps :func:`closeout.closeout_commands` (the pure command builder). For a
-    REVIEW decision it substitutes the real fixed review prompt (built from
-    diff + spec by ``reviewer.build_review_prompt``) and the secondary
-    provider/model — reviewer independence axes 2/3 (ADR-0007 §2). For FIX it
-    fills the primary provider/model on the implementer's worktree. PASS/STUCK
-    commands are returned verbatim (loop-owned ``gh`` operations).
+    Builds the pure intent (:func:`closeout.closeout_plan`) and turns any
+    REVIEW/FIX :class:`closeout.RunIntent` into a real ``paseo run`` via
+    :func:`_intent_to_paseo_run` — one source of truth for the command shape
+    (issue #52). For REVIEW it substitutes the real fixed review prompt (built
+    from diff + spec by ``reviewer.build_review_prompt``) and the secondary
+    provider/model — reviewer independence axes 2/3 (ADR-0007 §2). For FIX the
+    intent already carries the verbatim findings prompt; the driver attaches
+    the primary provider/model + implementer workspace. PASS/STUCK
+    ``gh_commands`` are returned verbatim (loop-owned ``gh`` operations).
 
     ``gh`` is the injected GitHub reader (twin of ``runner``); it defaults to
-    the live :class:`github.GhCliReader` so the function stays callable
-    standalone. PASS/FIX never read GitHub; only REVIEW (diff + spec) does.
-    ``head_sha`` is passed through to the review-prompt builder; when omitted
-    it is fetched via the reader.
+    the live :class:`github.GhCliReader`. PASS/FIX never read GitHub; only
+    REVIEW (diff + spec) does. ``head_sha`` is passed to the review-prompt
+    builder; when omitted it is fetched via the reader (REVIEW only — PASS/FIX
+    no longer trigger a head-sha read they never used).
     """
     reader = gh or GhCliReader()
+    plan = closeout.closeout_plan(decision, cfg.repo, issue_number, pr_number)
 
-    url = pr_url(cfg.repo, pr_number)
-    sha = head_sha or reader.pr_head_sha(cfg.repo, pr_number)
-    commands = closeout.closeout_commands(
-        decision,
-        cfg.repo, issue_number, pr_number, url, cfg.base_branch,
-        reviewer_workspace=review_worktree_name(issue_number),
-        implementer_workspace=implement_worktree_name(issue_number),
-    )
+    commands: list[list[str]] = [list(c) for c in plan.gh_commands]
+    if plan.run is None:
+        return commands
 
-    if decision.action == closeout.ACTION_REVIEW:
-        # Replace the placeholder review prompt with the real fixed prompt on
-        # the secondary provider (the pure builder could not know cfg/diff).
+    prompt_override: Optional[str] = None
+    if plan.run.kind == closeout.ACTION_REVIEW:
+        # Enrich the placeholder with the real fixed prompt (diff + spec via gh)
+        # on the secondary provider (reviewer-independence axes 2/3).
         _require_reviewer_independence(cfg)
-        prompt = _build_reviewer_prompt(cfg, reader, issue_number, pr_number, sha)
-        commands = [
-            _paseo_run(
-                provider=cfg.secondary_provider, model=cfg.secondary_model,
-                mode=cfg.mode, workspace=review_worktree_name(issue_number),
-                base=cfg.base_branch, prompt=prompt, extra=cfg.extra_run_args,
-            )
-        ]
+        sha = head_sha or reader.pr_head_sha(cfg.repo, pr_number)
+        prompt_override = _build_reviewer_prompt(
+            cfg, reader, issue_number, pr_number, sha
+        )
 
-    if decision.action == closeout.ACTION_FIX:
-        # closeout_commands already built the FIX paseo run with the verbatim
-        # prompt; re-emit it through _paseo_run so provider/model/mode come
-        # from cfg (the pure builder hardcodes a minimal paseo shape).
-        commands = [
-            _paseo_run(
-                provider=cfg.provider, model=cfg.model, mode=cfg.mode,
-                workspace=implement_worktree_name(issue_number),
-                base=cfg.base_branch,
-                prompt=closeout.fix_prompt(
-                    decision.findings_text, issue_number, url
-                ),
-                extra=cfg.extra_run_args,
-            )
-        ]
-
-    return [list(c) for c in commands]
+    commands.append(
+        _intent_to_paseo_run(cfg, plan.run, issue_number, prompt=prompt_override)
+    )
+    return commands
 
 
 def run_closeout_trajectory(
@@ -683,8 +700,10 @@ def run_closeout_trajectory(
     The pure, CI-safe realization of the close-out loop (issue #29 AC #5).
     No agents, no network: it iterates :func:`closeout.plan_closeout` over the
     supplied per-round verdict states and records each decision + its commands
-    (via :func:`closeout.closeout_commands`). Backs the ``closeout --outcomes``
-    CLI and the demo in ``docs/agents/closeout.md``.
+    (the intent from :func:`closeout.closeout_plan`, shaped into a ``paseo run``
+    by :func:`_intent_to_paseo_run` — one source of truth for the shape, issue
+    #52). Backs the ``closeout --outcomes`` CLI and the demo in
+    ``docs/agents/closeout.md``.
 
     A *round* = one completed review (``closeout`` convention: ``round`` counts
     reviews already done). The sim starts at ``start_round`` (default 1 = first
@@ -697,12 +716,11 @@ def run_closeout_trajectory(
     round_ = start_round
     for vs in outcomes:
         decision = closeout.plan_closeout(vs, round_)
-        commands = closeout.closeout_commands(
-            decision, cfg.repo, issue_number, pr_number,
-            pr_url(cfg.repo, pr_number), cfg.base_branch,
-            reviewer_workspace=review_worktree_name(issue_number),
-            implementer_workspace=implement_worktree_name(issue_number),
-        )
+        plan = closeout.closeout_plan(decision, cfg.repo, issue_number, pr_number)
+        commands: list[list[str]] = [list(c) for c in plan.gh_commands]
+        if plan.run is not None:
+            # The sim and the live driver share one paseo-run shape (issue #52).
+            commands.append(_intent_to_paseo_run(cfg, plan.run, issue_number))
         decisions.append({
             **decision.to_dict(),
             "commands": [list(c) for c in commands],

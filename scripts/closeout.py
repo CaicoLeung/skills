@@ -303,77 +303,144 @@ def auto_merge_command(repo: str, pr_number: int) -> list[str]:
     ]
 
 
-def closeout_commands(
+def review_placeholder_prompt(pr_url: str) -> str:
+    """The placeholder review prompt the pure builder can emit without ``gh``.
+
+    The live driver (:func:`loop.closeout_decision_commands`) substitutes the
+    real fixed review prompt — built from the PR diff + issue spec via the
+    injected GitHub gateway (ADR-0010) — so this placeholder only surfaces in
+    the trajectory sim, which has no live diff. Reviewer-independence axes 2/3
+    (no author-prose slot, separate identity) are still honored: the
+    placeholder carries no commit message or PR description, only a pointer.
+    """
+    return (
+        f"Run the independent code review (review-prompt.md) for "
+        f"{pr_url}. Emit only the two axes' findings; never a verdict."
+    )
+
+
+@dataclass(frozen=True)
+class RunIntent:
+    """Pure intent to shape one ``paseo run`` from (REVIEW or FIX).
+
+    The driver (:func:`loop.closeout_decision_commands`) and the trajectory
+    sim (:func:`loop.run_closeout_trajectory`) both turn this into a real
+    ``paseo run`` via the SAME builder (:func:`loop._intent_to_paseo_run`) —
+    one source of truth for the command shape. The pure builder owns the
+    prompt text: for FIX it is the verbatim findings handoff
+    (:func:`fix_prompt`); for REVIEW it is a placeholder
+    (:func:`review_placeholder_prompt`) the live driver enriches with the diff
+    + spec (the pure builder has no ``gh``). The workspace, base, and provider
+    are cfg-derived — the driver owns the paseo shell, not the pure builder
+    (issue #52).
+
+    Attributes:
+        kind: ``ACTION_REVIEW`` or ``ACTION_FIX`` (selects the workspace +
+            provider/model the driver attaches).
+        prompt: The skill prompt. FIX: verbatim findings; REVIEW: placeholder.
+    """
+
+    kind: str
+    prompt: str
+
+
+@dataclass(frozen=True)
+class CloseoutPlan:
+    """Pure intent for one close-out decision — no ``paseo``, no network.
+
+    The single source of truth the live driver and the trajectory sim both
+    consume (issue #52). ``gh_commands`` are the loop-owned deterministic
+    ``gh`` operations (PASS auto-merge + resolution comment; STUCK escalation
+    comment) — the only commands the pure builder emits. ``run`` is the
+    ``paseo run`` intent for REVIEW/FIX, which the consumers shape into a real
+    command from their config. Exactly one of the two is active: PASS/STUCK
+    carry ``gh_commands`` (``run`` is ``None``); REVIEW/FIX carry ``run``
+    (``gh_commands`` is empty).
+
+    Attributes:
+        gh_commands: The loop-owned ``gh`` ops (PASS/STUCK); ``[]`` for
+            REVIEW/FIX.
+        run: The ``paseo run`` intent (REVIEW/FIX); ``None`` for PASS/STUCK.
+    """
+
+    gh_commands: list[list[str]]
+    run: RunIntent | None = None
+
+
+def closeout_plan(
     decision: CloseoutDecision,
-    cfg_repo: str,
+    repo: str,
     issue_number: int,
     pr_number: int,
-    pr_url: str,
-    base_branch: str,
-    reviewer_workspace: str,
-    implementer_workspace: str,
-) -> list[list[str]]:
-    """The shell command(s) the driver runs for a close-out decision.
+) -> CloseoutPlan:
+    """The pure intent for a close-out decision (no ``paseo``, no network).
 
-    Single source of truth for the deterministic ``gh`` commands, so the
-    dry-run preview matches what runs (mirrors the T5a ``_turn_command``
-    invariant). The driver (:func:`loop.closeout_decision_commands`) refines
-    REVIEW/FIX into real ``paseo run`` invocations from its config (provider,
-    model, the fixed review prompt); PASS/STUCK commands are loop-owned and
-    returned verbatim.
+    Narrows the former ``closeout_commands`` (issue #52): the builder returns
+    **intent**, not shell commands, for REVIEW/FIX — the driver
+    (:func:`loop.closeout_decision_commands`) and the trajectory sim
+    (:func:`loop.run_closeout_trajectory`) build the real ``paseo run`` from
+    the same :class:`RunIntent` via one shared builder
+    (``loop._intent_to_paseo_run``), so the command shape has a single source
+    of truth instead of a placeholder the live driver discards.
+
+    Only the loop-owned ``gh`` ops retain command form:
 
     * PASS → ``gh pr merge --auto`` (loop-only auto-merge) + ``gh issue
       comment`` (the resolution comment — dual close with ``Fixes #N``).
     * STUCK → ``gh issue comment`` (the STUCK_REVIEW escalation); no merge.
-    * REVIEW → a placeholder ``paseo run`` in the reviewer's separate worktree
-      (the driver swaps in the real fixed prompt on the secondary provider).
-    * FIX → a ``paseo run`` in the implementer's worktree carrying
-      :func:`fix_prompt` with the findings verbatim.
+    * REVIEW → a :class:`RunIntent` (placeholder prompt; the driver enriches
+      it with the live diff + spec on the secondary provider).
+    * FIX → a :class:`RunIntent` carrying :func:`fix_prompt` with the findings
+      verbatim.
 
-    ``base_branch`` is accepted for symmetry with the routing driver (REVIEW's
-    worktree is branched off it); it is not used by the loop-owned ``gh``
-    commands themselves.
+    The signature collapses to the decision + the values the intent text
+    needs (``repo`` / ``issue_number`` / ``pr_number``); the PR URL is derived,
+    and the paseo-shell values (workspace, base, provider, model) are
+    cfg-derived and attached by the driver — the driver owns the paseo shell.
+
+    Args:
+        decision: The planned close-out decision.
+        repo: The ``owner/name`` repo (for the ``gh`` ops + the derived PR URL).
+        issue_number: The issue the PR implements.
+        pr_number: The PR under review.
+
+    Returns:
+        The :class:`CloseoutPlan` the driver / sim consume.
     """
+    url = f"https://github.com/{repo}/pull/{pr_number}"
+
     if decision.action == ACTION_PASS:
-        return [
-            auto_merge_command(cfg_repo, pr_number),
+        return CloseoutPlan(gh_commands=[
+            auto_merge_command(repo, pr_number),
             [
                 "gh", "issue", "comment", str(issue_number),
-                "--repo", cfg_repo,
-                "--body", resolution_comment(issue_number, pr_url, decision.round),
+                "--repo", repo,
+                "--body", resolution_comment(issue_number, url, decision.round),
             ],
-        ]
+        ])
 
     if decision.action == ACTION_STUCK:
-        return [
+        return CloseoutPlan(gh_commands=[
             [
                 "gh", "issue", "comment", str(issue_number),
-                "--repo", cfg_repo,
-                "--body", stuck_message(issue_number, pr_url, decision.round),
+                "--repo", repo,
+                "--body", stuck_message(issue_number, url, decision.round),
             ],
-        ]
+        ])
 
     if decision.action == ACTION_REVIEW:
-        # Placeholder: the driver replaces this with the real fixed review
-        # prompt on the secondary provider (reviewer-independence axes 2/3).
-        return [
-            [
-                "paseo", "run",
-                "--worktree", reviewer_workspace,
-                "--base", base_branch,
-                "--detach",
-                f"Run the independent code review (review-prompt.md) for "
-                f"{pr_url}. Emit only the two axes' findings; never a verdict.",
-            ],
-        ]
+        # Intent only: the driver enriches the placeholder with the real fixed
+        # review prompt (diff + spec via gh) on the secondary provider.
+        return CloseoutPlan(
+            gh_commands=[],
+            run=RunIntent(kind=ACTION_REVIEW, prompt=review_placeholder_prompt(url)),
+        )
 
-    # ACTION_FIX — same implementer, verbatim findings.
-    return [
-        [
-            "paseo", "run",
-            "--worktree", implementer_workspace,
-            "--base", base_branch,
-            "--detach",
-            fix_prompt(decision.findings_text, issue_number, pr_url),
-        ],
-    ]
+    # ACTION_FIX — same implementer, verbatim findings (computed once here).
+    return CloseoutPlan(
+        gh_commands=[],
+        run=RunIntent(
+            kind=ACTION_FIX,
+            prompt=fix_prompt(decision.findings_text, issue_number, url),
+        ),
+    )
