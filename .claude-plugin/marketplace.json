@@ -1,0 +1,32 @@
+{
+  "name": "CaicoLeung-skills",
+  "owner": {
+    "name": "CaicoLeung"
+  },
+  "metadata": {
+    "description": "Loop Engineering skills — a fork of mattpocock/skills carrying only the ticket-driven loop core, Paseo adapter, and deterministic driver (ADR-0001)."
+  },
+  "plugins": [
+    {
+      "name": "ticket-workflow-core",
+      "source": "./skills/ticket-workflow-core",
+      "description": "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision.",
+      "strict": false,
+      "skills": ["./"]
+    },
+    {
+      "name": "tickets-to-paseo",
+      "source": "./skills/tickets-to-paseo",
+      "description": "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor).",
+      "strict": false,
+      "skills": ["./"]
+    },
+    {
+      "name": "loop-engineering",
+      "source": "./skills/loop-engineering",
+      "description": "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch) and the close-out loop (review → derived verdict → fix → merge → close) and invokes external doing-skills as leaves (ADR-0008).",
+      "strict": false,
+      "skills": ["./"]
+    }
+  ]
+}
