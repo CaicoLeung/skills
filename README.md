@@ -9,6 +9,35 @@ encoded as scripted steps with a verification gate at each stage. See
 [ADR-0001](./docs/adr/0001-fork-with-selective-sync.md) for the fork's
 selective-sync policy.
 
+## Install
+
+Clone the whole repo — `loop-engineering` is driven by `scripts/loop.py`,
+`routing.py`, and `closeout.py`, so copying `skills/` alone leaves it pointing
+at nothing.
+
+```bash
+git clone https://github.com/CaicoLeung/skills.git
+cd skills
+```
+
+Prerequisites:
+
+- **Python 3** — runs `scripts/*.py` (zero third-party deps; CI uses `3.x`).
+- **[`gh` CLI](https://cli.github.com/)** — the loop reads ticket labels, posts
+  comments, enables auto-merge, and closes issues through it. Run `gh auth login`
+  first.
+- **Paseo daemon (0.1.110)** — the executor `tickets-to-paseo` maps onto
+  (`paseo run`, `paseo chat`, `paseo worktree`). Verify with `paseo daemon status`.
+- **External doing-skills** — the loop *invokes* `/implement`, `/triage`,
+  `/code-review`, `/research`, `/prototype`, `/grilling` but does **not** carry
+  them (ADR-0001). Install them from upstream
+  [`mattpocock/skills`](https://github.com/mattpocock/skills).
+
+> **CI gates.** `validate-skills` and `review-verdict` run only on this repo's
+> GitHub Actions behind branch protection (ADR-0003). A consumer fork must
+> replicate `.github/workflows/` and the required status checks to keep the
+> auto-merge gate.
+
 ## Skills
 
 | Skill | Role |
