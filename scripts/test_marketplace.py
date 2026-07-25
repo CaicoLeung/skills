@@ -261,7 +261,7 @@ def main() -> int:
     # PR that deletes BOTH the drift step AND this test's step at once would
     # stop the guard running at all — that same-PR deletion is out of reach for
     # a same-job self-test and is left to human review (and the fact that the
-    # skills.py contexts<->jobs drift guard still requires the `validate-skills`
+    # branch_protection.py contexts<->jobs drift guard still requires the `validate-skills`
     # job to exist). Mirrors that drift guard, which parses structurally; here
     # we assert active (non-commented) lines so a commented-out step is caught
     # too. The matches are intentionally literal: a script rename or step
@@ -290,7 +290,7 @@ def main() -> int:
                   "so this guard would not execute in CI")
             failed += 1
         # The job name must equal the required status-check context name
-        # (skills.py drift guard asserts the same for every required context).
+        # (the branch_protection.py drift guard asserts the same for every required context).
         if not any(ln.strip() == "validate-skills:" for ln in active):
             print("  FAIL validate-skills.yml job must be named 'validate-skills' "
                   "to match the required status-check context (ADR-0003)")

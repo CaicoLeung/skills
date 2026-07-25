@@ -53,10 +53,11 @@ EOF
 ### Required status-check contexts (source of truth)
 
 Each required context is a workflow *job* whose name equals the context name. The
-`scripts/skills.py` drift guard asserts this 1:1 mapping — a required context with no
-matching job name fails `validate-skills.py`, and a job whose name no longer matches a
-required context is flagged. Add or remove a context here and in branch protection
-together.
+`scripts/branch_protection.py` drift guard (extracted from `scripts/skills.py` in
+issue #53, run as its own `validate-skills` job step) asserts this 1:1 mapping — a
+required context with no matching job name fails the job, and a job whose name no
+longer matches a required context is flagged. Add or remove a context here and in
+branch protection together.
 
 | Context | Workflow job | Enforces |
 | --- | --- | --- |
@@ -70,7 +71,7 @@ and blocks merge — no separate context is warranted. A regression test
 (`scripts/test_marketplace.py → CI gating guard`) fails if that step is removed or
 commented out, so the drift step resists silent deletion (the residual limit — a PR
 that deletes both the drift step and the test step at once — is left to human review;
-the `skills.py` contexts↔jobs drift guard still requires the `validate-skills` job).
+the `branch_protection.py` contexts↔jobs drift guard still requires the `validate-skills` job).
 
 ### 3. Gate enforcement location
 
