@@ -25,7 +25,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _test_fakes import FakeGitHubReader  # noqa: E402
+from github import GitHubReader  # noqa: E402
 import closeout  # noqa: E402
+import loop  # noqa: E402
 
 
 def _check(condition: bool, label: str, failed: list[str]) -> None:
@@ -357,6 +360,145 @@ def main() -> int:
             # The four actions are mutually exclusive in meaning: only PASS merges.
             if d.action == closeout.ACTION_PASS:
                 _check(status == closeout.VERDICT_PASS, "PASS only on a passing verdict", failed)
+
+    # =========================================================================
+    # Driver through the gateway: run_closeout_round composes T3+T1 from fake PR
+    # comments. Previously exercised only via --dry-run with verdict_state/
+    # round_number overrides; with the injected reader the verdict is DERIVED
+    # from fake comments, not supplied — the real close-out path, testable.
+    # =========================================================================
+    print("run_closeout_round through the gateway (fake reader):")
+    _check(
+        isinstance(FakeGitHubReader(), GitHubReader),
+        "FakeGitHubReader must satisfy the GitHubReader Protocol",
+        failed,
+    )
+
+    sha = "deadbeef"
+    cfg_co = loop.DriverConfig(
+        repo="CaicoLeung/skills", reviewer_login="reviewer-bot",
+    )
+
+    # A passing review: every changed file covered, no blocking findings.
+    fake_pass = FakeGitHubReader()
+    fake_pass.head_shas[42] = sha
+    fake_pass.changed_files[42] = ["scripts/x.py"]
+    fake_pass.comments[42] = [{
+        "id": 1,
+        "user": {"login": "reviewer-bot"},
+        "created_at": "2026-07-25T10:00:00Z",
+        "body": (
+            f"<!-- review-verdict-findings sha={sha} -->\n\n"
+            "### Standards\nscripts/x.py: OK\n"
+            "### Spec\nscripts/x.py: OK\n"
+        ),
+    }]
+    rep = loop.run_closeout_round(29, 42, cfg_co, gh=fake_pass, dry_run=True)
+    _check(rep["head_sha"] == sha, "run_closeout_round reads head via the fake", failed)
+    _check(
+        rep["verdict"]["status"] == "pass",
+        f"derived verdict must be pass (got {rep['verdict']['status']})",
+        failed,
+    )
+    _check(
+        rep["decision"]["action"] == "pass",
+        "pass verdict -> PASS decision (auto-merge path)",
+        failed,
+    )
+    _check(
+        any(c[:3] == ["gh", "pr", "merge"] and "--auto" in c for c in rep["commands"]),
+        "PASS via the gateway must still emit the loop-owned auto-merge",
+        failed,
+    )
+
+    # A failing review (HIGH finding) at round 1 -> FIX; the round count is
+    # read from the fake's comments (one reviewer findings comment => round 1).
+    fake_fail = FakeGitHubReader()
+    fake_fail.head_shas[42] = sha
+    fake_fail.changed_files[42] = ["scripts/x.py"]
+    fake_fail.comments[42] = [{
+        "id": 2,
+        "user": {"login": "reviewer-bot"},
+        "created_at": "2026-07-25T11:00:00Z",
+        "body": (
+            f"<!-- review-verdict-findings sha={sha} -->\n\n"
+            "### Standards\n[scripts/x.py:9]: HIGH: null deref\n"
+        ),
+    }]
+    rep_fail = loop.run_closeout_round(29, 42, cfg_co, gh=fake_fail, dry_run=True)
+    _check(
+        rep_fail["verdict"]["status"] == "fail",
+        f"HIGH finding -> fail verdict (got {rep_fail['verdict']['status']})",
+        failed,
+    )
+    _check(
+        rep_fail["decision"]["action"] == "fix",
+        "fail at round 1 -> FIX (findings handed to the implementer)",
+        failed,
+    )
+    _check(
+        rep_fail["round"] == 1,
+        f"round count read from the fake's comments (got {rep_fail['round']})",
+        failed,
+    )
+
+    # A PR with NO reviewer findings comment yet -> derived verdict MISSING at
+    # round 0 -> REVIEW. run_closeout_round must drive the full REVIEW path:
+    # plan_closeout -> _require_reviewer_independence -> build the fixed review
+    # prompt from the fake's diff+spec -> emit a paseo run on the SECONDARY
+    # provider in the reviewer's separate worktree. This is the one claimed
+    # testable path that had no end-to-end coverage through the driver.
+    print("run_closeout_round REVIEW path through the gateway (no review yet):")
+    cfg_rev = loop.DriverConfig(
+        repo="CaicoLeung/skills", reviewer_login="reviewer-bot",
+        provider="anthropic", model="claude-impl",
+        secondary_provider="openai", secondary_model="gpt-reviewer",
+    )
+    fake_rev = FakeGitHubReader()
+    fake_rev.head_shas[42] = sha
+    fake_rev.diffs[42] = "+diff line A\n-diff line B\n"
+    fake_rev.bodies[29] = "## Acceptance\n- do the thing\n"
+    fake_rev.changed_files[42] = ["scripts/x.py"]
+    # No comments[42]: the reviewer has not posted yet.
+    rep_rev = loop.run_closeout_round(29, 42, cfg_rev, gh=fake_rev, dry_run=True)
+    _check(
+        rep_rev["verdict"]["status"] == "missing",
+        f"no review comment -> MISSING verdict (got {rep_rev['verdict']['status']})",
+        failed,
+    )
+    _check(
+        rep_rev["round"] == 0,
+        f"no reviewer comments -> round 0 (got {rep_rev['round']})",
+        failed,
+    )
+    _check(
+        rep_rev["decision"]["action"] == "review",
+        "MISSING at round 0 -> REVIEW (independent reviewer invoked)",
+        failed,
+    )
+    rev_run = [c for c in rep_rev["commands"] if c[:1] == ["paseo"]]
+    _check(
+        len(rev_run) == 1,
+        f"REVIEW must emit one paseo command (got {len(rev_run)})",
+        failed,
+    )
+    if rev_run:
+        cmd = rev_run[0]
+        _check(
+            "openai" in cmd and "gpt-reviewer" in cmd,
+            "REVIEW must run on the SECONDARY provider/model",
+            failed,
+        )
+        _check(
+            "issue-29-review" in cmd,
+            "REVIEW must run in the reviewer's separate worktree",
+            failed,
+        )
+        _check(
+            "+diff line A" in cmd[-1] and "## Acceptance" in cmd[-1],
+            "REVIEW prompt must carry the fake's diff + spec verbatim",
+            failed,
+        )
 
     if failed:
         print(f"\n{len(failed)} close-out test(s) failed.", file=sys.stderr)

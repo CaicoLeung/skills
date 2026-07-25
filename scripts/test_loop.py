@@ -23,6 +23,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _test_fakes import FakeGitHubReader  # noqa: E402
+from github import GitHubReader  # noqa: E402
 import loop  # noqa: E402
 import routing  # noqa: E402
 
@@ -284,6 +286,79 @@ def main() -> int:
     _check(
         any(c[:3] == ["gh", "issue", "comment"] for c in pass_cmds),
         "PASS enrichment emits the dual-close resolution comment",
+        failed,
+    )
+
+    # --- Driver through the gateway: run_ticket_loop reads labels via the fake --
+    # Previously disclaimed as untestable (issue #23: it hit real ``gh``). The
+    # ``gh`` param twins ``runner`` — inject a fake and the routing driver is
+    # exercised end to end through its own interface, no network.
+    print("run_ticket_loop through the gateway (fake reader):")
+    _check(
+        isinstance(FakeGitHubReader(), GitHubReader),
+        "FakeGitHubReader must satisfy the GitHubReader Protocol",
+        failed,
+    )
+    fake = FakeGitHubReader()
+    fake.labels[28] = ["ready-for-agent", "task"]
+    cfg_loop = loop.DriverConfig(repo="CaicoLeung/skills")
+    report = loop.run_ticket_loop(28, cfg_loop, dry_run=True, gh=fake)
+    _check(
+        report["labels"] == ["ready-for-agent", "task"],
+        f"run_ticket_loop must read labels via the fake (got {report['labels']})",
+        failed,
+    )
+    _check(
+        report["turn"]["opens_pr"] is True,
+        "ready-for-agent+task via the fake must open a PR",
+        failed,
+    )
+    _check(
+        isinstance(report["command"], list) and report["command"][0] == "paseo",
+        "run_ticket_loop must build the paseo command from the fake-read labels",
+        failed,
+    )
+
+    # --- REVIEW enrichment through the gateway: diff+spec reach the prompt ------
+    # The case this suite explicitly skipped ("needs gh for the live diff").
+    # The fake supplies diff/spec/changed-files; REVIEW must run on the SECONDARY
+    # provider in the review worktree, and the fake's diff+spec must survive into
+    # the rendered review prompt (proving the gateway feeds reviewer.build_review_prompt).
+    print("REVIEW enrichment through the gateway (diff+spec via fake):")
+    fake_r = FakeGitHubReader()
+    fake_r.diffs[42] = "+diff line A\n-diff line B\n"
+    fake_r.bodies[29] = "## Acceptance\n- do the thing\n"
+    fake_r.changed_files[42] = ["scripts/x.py"]
+    cfg_rev = loop.DriverConfig(
+        repo="CaicoLeung/skills",
+        provider="anthropic", model="claude-impl",
+        secondary_provider="openai", secondary_model="gpt-reviewer",
+    )
+    review_dec = closeout.plan_closeout(
+        closeout.VerdictState(closeout.VERDICT_MISSING, "", 0, 0), round=0
+    )
+    _check(
+        review_dec.action == closeout.ACTION_REVIEW,
+        "VERDICT_MISSING at round 0 -> REVIEW",
+        failed,
+    )
+    rev_cmds = loop.closeout_decision_commands(
+        cfg_rev, review_dec, 29, 42, head_sha="deadbeef", gh=fake_r
+    )
+    rev_run = [c for c in rev_cmds if c[0] == "paseo"][0]
+    _check(
+        "openai" in rev_run and "gpt-reviewer" in rev_run,
+        "REVIEW must run on the SECONDARY provider/model",
+        failed,
+    )
+    _check(
+        "issue-29-review" in rev_run,
+        "REVIEW must run in the reviewer's separate worktree",
+        failed,
+    )
+    _check(
+        "+diff line A" in rev_run[-1] and "## Acceptance" in rev_run[-1],
+        "REVIEW prompt must carry the fake's diff + spec verbatim",
         failed,
     )
 

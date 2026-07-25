@@ -47,6 +47,7 @@ if __package__ in (None, ""):
 import closeout  # noqa: E402
 import routing  # noqa: E402
 import skills  # noqa: E402
+from github import GhCliReader, GitHubReader  # noqa: E402
 
 # --- Loop actions -----------------------------------------------------------
 # The loop's view of a turn reuses the routing module's action vocabulary —
@@ -226,38 +227,10 @@ def dispatch_prompt(skill: str, issue_number: int, ticket_type: Optional[routing
 
 
 # --- Driver: thin I/O over the pure planner ---------------------------------
-# Reads labels with ``gh``, plans the turn, invokes skills with
-# ``paseo run --detach``. Deliberately not unit-tested (issue #23 testing
-# decisions); ``--dry-run`` emits the planned turn + command without executing.
-
-
-def _gh_issue_labels(issue_number: int, repo: str) -> list[str]:
-    """Return a ticket's label names via the GitHub CLI.
-
-    Uses ``gh issue view --json labels``. Raises ``RuntimeError`` if ``gh`` is
-    unavailable or the issue is not found — the driver surfaces I/O failures
-    rather than guessing a route from silence.
-    """
-    try:
-        result = subprocess.run(
-            [
-                "gh", "issue", "view", str(issue_number),
-                "--repo", repo,
-                "--json", "number,title,labels",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("`gh` CLI not found on PATH") from exc
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"gh issue view #{issue_number} failed: {exc.stderr.strip()}"
-        ) from exc
-
-    data = json.loads(result.stdout)
-    return [label["name"] for label in data.get("labels", [])]
+# Reads labels via the injected GitHub reader (scripts/github.py), plans the
+# turn, invokes skills with ``paseo run --detach``. The ``gh`` parameter twins
+# ``runner``: default :class:`github.GhCliReader` (live), a fake in tests — so
+# the driver is exercised through its own interface, not just ``--dry-run``.
 
 
 @dataclass(frozen=True)
@@ -398,6 +371,7 @@ def run_ticket_loop(
     *,
     dry_run: bool = False,
     runner: Optional[Callable[..., int]] = None,
+    gh: Optional[GitHubReader] = None,
 ) -> dict:
     """Drive one routing turn for a claimed ticket.
 
@@ -414,6 +388,9 @@ def run_ticket_loop(
         runner: Optional callable ``(cmd: list[str]) -> int`` replacing the
             shell invocation. Defaults to :func:`subprocess.run`. Used by
             integration harnesses; not by the unit tests.
+        gh: Optional :class:`github.GitHubReader` replacing the live ``gh``
+            reads. Defaults to :class:`github.GhCliReader`. Twin of ``runner``:
+            pass a fake to exercise the driver through its own interface.
 
     The close-out half (review → verdict → merge → close, T5b) is out of
     scope here: for ``task`` this function ends at "implement turn invoked /
@@ -421,8 +398,9 @@ def run_ticket_loop(
     """
     cfg = cfg or DriverConfig()
     run = runner or (lambda cmd: subprocess.run(cmd, check=True).returncode)
+    reader = gh or GhCliReader()
 
-    labels = _gh_issue_labels(issue_number, cfg.repo)
+    labels = reader.issue_labels(cfg.repo, issue_number)
     turn = plan_turn(labels, issue_number)
 
     command = _turn_command(cfg, issue_number, turn)
@@ -537,94 +515,28 @@ def _require_reviewer_independence(cfg: DriverConfig) -> None:
         )
 
 
-def _gh_pr_head_sha(pr_number: int, repo: str) -> str:
-    """Return the PR head SHA via ``gh``."""
-    try:
-        result = subprocess.run(
-            ["gh", "pr", "view", str(pr_number), "--repo", repo,
-             "--json", "headRefOid"],
-            check=True, capture_output=True, text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"gh pr view #{pr_number} head failed: {exc}") from exc
-    return json.loads(result.stdout)["headRefOid"]
-
-
-def _gh_pr_diff(pr_number: int, repo: str) -> str:
-    """Return the PR diff via ``gh pr diff`` (the reviewer's input; no prose)."""
-    try:
-        result = subprocess.run(
-            ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-            check=True, capture_output=True, text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"gh pr diff #{pr_number} failed: {exc}") from exc
-    return result.stdout
-
-
-def _gh_issue_body(issue_number: int, repo: str) -> str:
-    """Return the issue body (the ticket spec) via ``gh``."""
-    try:
-        result = subprocess.run(
-            ["gh", "issue", "view", str(issue_number), "--repo", repo,
-             "--json", "body"],
-            check=True, capture_output=True, text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"gh issue view #{issue_number} body failed: {exc}") from exc
-    return json.loads(result.stdout).get("body", "") or ""
-
-
-def _gh_pr_changed_files(pr_number: int, repo: str) -> list[str]:
-    """Return the PR's changed file paths via ``gh``."""
-    try:
-        result = subprocess.run(
-            ["gh", "pr", "view", str(pr_number), "--repo", repo,
-             "--json", "files"],
-            check=True, capture_output=True, text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"gh pr view #{pr_number} files failed: {exc}") from exc
-    files = json.loads(result.stdout).get("files") or []
-    return [f.get("path") for f in files if f.get("path")]
-
-
-def _gh_pr_issue_comments(pr_number: int, repo: str) -> list[dict]:
-    """Return the PR's top-level (issue) comments via the REST API."""
-    try:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments",
-             "--paginate"],
-            check=True, capture_output=True, text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"gh api comments #{pr_number} failed: {exc}") from exc
-    out = result.stdout.strip()
-    comments = json.loads(out) if out else []
-    return comments if isinstance(comments, list) else []
-
-
 def _build_reviewer_prompt(
-    cfg: DriverConfig, issue_number: int, pr_number: int, head_sha: str
+    cfg: DriverConfig, gh: GitHubReader, issue_number: int, pr_number: int, head_sha: str
 ) -> str:
     """Render the fixed review prompt from diff + spec ONLY (ADR-0007 §2).
 
     Delegates to ``reviewer.build_review_prompt`` (T4), which substitutes the
     committed ``review-prompt.md`` — no author-prose slot, so commit messages
-    and PR descriptions can never reach the reviewer.
+    and PR descriptions can never reach the reviewer. The diff / spec / changed
+    files are read through the injected ``gh`` gateway (testable via a fake).
     """
     import reviewer  # noqa: E402  (lazy: keep loop.py standalone-importable)
 
-    diff = _gh_pr_diff(pr_number, cfg.repo)
-    spec = _gh_issue_body(issue_number, cfg.repo)
-    changed = _gh_pr_changed_files(pr_number, cfg.repo)
+    diff = gh.pr_diff(cfg.repo, pr_number)
+    spec = gh.issue_body(cfg.repo, issue_number)
+    changed = gh.pr_changed_files(cfg.repo, pr_number)
     return reviewer.build_review_prompt(
         diff=diff, spec=spec, sha=head_sha, changed_files=changed
     )
 
 
 def read_verdict_state(
-    cfg: DriverConfig, issue_number: int, pr_number: int, head_sha: str,
+    cfg: DriverConfig, gh: GitHubReader, issue_number: int, pr_number: int, head_sha: str,
     comments: Optional[list[dict]] = None,
 ) -> closeout.VerdictState:
     """Compose the PR's current derived verdict (T3 selection + T1 rule).
@@ -637,13 +549,14 @@ def read_verdict_state(
     body is carried verbatim so the fix-step prompt embeds it exactly.
 
     ``comments`` may be passed to reuse PR comments the caller already fetched
-    (avoids a second paginated fetch); fetched via ``gh`` when ``None``.
+    (avoids a second paginated fetch); fetched via the injected ``gh`` gateway
+    when ``None``.
     """
     import review_verdict  # noqa: E402
     import verdict  # noqa: E402
 
-    comments = comments if comments is not None else _gh_pr_issue_comments(
-        pr_number, cfg.repo
+    comments = comments if comments is not None else gh.issue_comments(
+        cfg.repo, pr_number
     )
     selected = review_verdict.select_current_findings(
         comments, head_sha, cfg.reviewer_login
@@ -653,7 +566,7 @@ def read_verdict_state(
             status=closeout.VERDICT_MISSING, findings_text="",
             blocking_count=0, coverage_gap_count=0,
         )
-    changed = _gh_pr_changed_files(pr_number, cfg.repo)
+    changed = gh.pr_changed_files(cfg.repo, pr_number)
     result = verdict.derive_verdict(selected.body, changed)
     return closeout.VerdictState(
         status=closeout.VERDICT_PASS if result.passed else closeout.VERDICT_FAIL,
@@ -663,19 +576,23 @@ def read_verdict_state(
     )
 
 
-def review_round_count(cfg: DriverConfig, pr_number: int, comments: Optional[list[dict]] = None) -> int:
+def review_round_count(
+    cfg: DriverConfig, gh: GitHubReader, pr_number: int,
+    comments: Optional[list[dict]] = None,
+) -> int:
     """Number of reviewer findings comments already posted on the PR.
 
     A *round* is one completed independent review of the current PR head
     (ADR-0008 §5; ``closeout.plan_closeout`` counts the cap in these). The
     driver counts the reviewer identity's sha-tagged findings comments — each
     posted comment is one review round completed. ``comments`` may be passed to
-    reuse PR comments the caller already fetched; fetched via ``gh`` when ``None``.
+    reuse PR comments the caller already fetched; fetched via the injected
+    ``gh`` gateway when ``None``.
     """
     import review_verdict  # noqa: E402
 
-    comments = comments if comments is not None else _gh_pr_issue_comments(
-        pr_number, cfg.repo
+    comments = comments if comments is not None else gh.issue_comments(
+        cfg.repo, pr_number
     )
     rounds = 0
     for c in comments:
@@ -693,6 +610,7 @@ def closeout_decision_commands(
     issue_number: int,
     pr_number: int,
     head_sha: Optional[str] = None,
+    gh: Optional[GitHubReader] = None,
 ) -> list[list[str]]:
     """The shell command(s) for a close-out decision, enriched for live review.
 
@@ -703,12 +621,16 @@ def closeout_decision_commands(
     fills the primary provider/model on the implementer's worktree. PASS/STUCK
     commands are returned verbatim (loop-owned ``gh`` operations).
 
-    ``head_sha`` (which :func:`run_closeout_round` already holds) is passed
-    through to the review-prompt builder; when omitted it is fetched via ``gh``
-    so the function stays callable standalone.
+    ``gh`` is the injected GitHub reader (twin of ``runner``); it defaults to
+    the live :class:`github.GhCliReader` so the function stays callable
+    standalone. PASS/FIX never read GitHub; only REVIEW (diff + spec) does.
+    ``head_sha`` is passed through to the review-prompt builder; when omitted
+    it is fetched via the reader.
     """
+    reader = gh or GhCliReader()
+
     url = pr_url(cfg.repo, pr_number)
-    sha = head_sha or _gh_pr_head_sha(pr_number, cfg.repo)
+    sha = head_sha or reader.pr_head_sha(cfg.repo, pr_number)
     commands = closeout.closeout_commands(
         decision,
         cfg.repo, issue_number, pr_number, url, cfg.base_branch,
@@ -720,7 +642,7 @@ def closeout_decision_commands(
         # Replace the placeholder review prompt with the real fixed prompt on
         # the secondary provider (the pure builder could not know cfg/diff).
         _require_reviewer_independence(cfg)
-        prompt = _build_reviewer_prompt(cfg, issue_number, pr_number, sha)
+        prompt = _build_reviewer_prompt(cfg, reader, issue_number, pr_number, sha)
         commands = [
             _paseo_run(
                 provider=cfg.secondary_provider, model=cfg.secondary_model,
@@ -811,6 +733,7 @@ def run_closeout_round(
     round_number: Optional[int] = None,
     dry_run: bool = False,
     runner: Optional[Callable[..., int]] = None,
+    gh: Optional[GitHubReader] = None,
 ) -> dict:
     """Drive ONE close-out round for a PR.
 
@@ -830,29 +753,32 @@ def run_closeout_round(
         round_number: Override the review-round count (else counted via ``gh``).
         dry_run: Plan + print the decision/commands without executing.
         runner: Optional ``(cmd, **kwargs) -> int`` replacing the shell call.
+        gh: Optional :class:`github.GitHubReader` replacing the live ``gh``
+            reads. Defaults to :class:`github.GhCliReader`. Twin of ``runner``.
     """
     cfg = cfg or DriverConfig()
     run = runner or (lambda cmd, **kw: subprocess.run(cmd, check=True, **kw).returncode)
+    reader = gh or GhCliReader()
 
-    sha = head_sha or _gh_pr_head_sha(pr_number, cfg.repo)
+    sha = head_sha or reader.pr_head_sha(cfg.repo, pr_number)
     # Fetch the PR's issue comments once and thread them through both the
     # verdict derivation and the round count — each would otherwise paginate
     # the same endpoint a second time per round.
     comments = None
     if verdict_state is None or round_number is None:
-        comments = _gh_pr_issue_comments(pr_number, cfg.repo)
+        comments = reader.issue_comments(cfg.repo, pr_number)
     vs = verdict_state if verdict_state is not None else read_verdict_state(
-        cfg, issue_number, pr_number, sha, comments=comments
+        cfg, reader, issue_number, pr_number, sha, comments=comments
     )
     rnd = round_number if round_number is not None else review_round_count(
-        cfg, pr_number, comments=comments
+        cfg, reader, pr_number, comments=comments
     )
 
     decision = closeout.plan_closeout(vs, rnd)
 
     try:
         commands = closeout_decision_commands(
-            cfg, decision, issue_number, pr_number, head_sha=sha
+            cfg, decision, issue_number, pr_number, head_sha=sha, gh=reader
         )
     except RuntimeError as exc:
         commands = []
