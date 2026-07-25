@@ -2,7 +2,7 @@ name: review-verdict
 
 # The derived-verdict gate (ADR-0007). Runs on every PR: finds the reviewer
 # identity's latest findings comment whose reviewed-SHA equals the PR head,
-# derives the verdict from it (scripts/verdict.py), and the job's own
+# derives the verdict from it (skills/loop-engineering/scripts/verdict.py), and the job's own
 # pass/fail becomes the `review-verdict` status check. A stale review
 # (sha mismatch) or a missing review fails as "no current review".
 #
@@ -60,7 +60,7 @@ jobs:
 
       - name: Derive verdict from reviewer's findings (ADR-0007)
         run: |
-          python3 scripts/review_verdict.py \
+          python3 skills/loop-engineering/scripts/review_verdict.py \
             --repo "$GITHUB_REPOSITORY" \
             --pr "${{ steps.pr.outputs.number }}" \
             --sha "${{ steps.sha.outputs.sha }}" \

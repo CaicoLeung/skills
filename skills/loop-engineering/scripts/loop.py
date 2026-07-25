@@ -39,8 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
-# Allow ``python3 scripts/loop.py`` (script) and ``from scripts.loop import``
-# (pytest) to both find the sibling ``routing`` module.
+# Allow ``python3 .../loop.py`` (run as a script) to find the sibling ``closeout``
+# and ``routing`` modules in this same directory.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 

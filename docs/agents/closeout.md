@@ -35,12 +35,12 @@ round k:  loop invokes the independent reviewer (T4)
                 missing → REVIEW (no current review for this head)
 ```
 
-* **Pure planner** — [`scripts/closeout.py`](../../scripts/closeout.py):
+* **Pure planner** — [`skills/loop-engineering/scripts/closeout.py`](../../skills/loop-engineering/scripts/closeout.py):
   `plan_closeout(verdict, round)` is total over `(status, round)` and is the
   only thing that decides pass/review/fix/stuck. Also authors `fix_prompt`
   (verbatim handoff), `resolution_comment` (dual close), `stuck_message`
   (`STUCK_REVIEW`), and `auto_merge_command` (loop-only).
-* **Thin driver** — [`scripts/loop.py`](../../scripts/loop.py):
+* **Thin driver** — [`skills/loop-engineering/scripts/loop.py`](../../skills/loop-engineering/scripts/loop.py):
   `run_closeout_round` (one live round) and `run_closeout_trajectory` (a pure
   sim over a verdict sequence). They read PR state via `gh`, reuse T3's
   `review_verdict.select_current_findings` + T1's `verdict.derive_verdict`, and
@@ -60,12 +60,12 @@ round k:  loop invokes the independent reviewer (T4)
 
 ```bash
 # Simulate the full trajectory for a per-round outcome list (CI-safe):
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes pass                 # clean pass
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass       # fix loop → pass
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail       # → STUCK_REVIEW
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes pass                 # clean pass
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass       # fix loop → pass
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail       # → STUCK_REVIEW
 
 # Drive one live round for a real PR (reviewer on a different provider):
-python3 scripts/loop.py closeout 29 --pr 99 \
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 \
   --secondary-provider openai --secondary-model gpt-4o \
   --reviewer-login "$REVIEWER_LOGIN" --dry-run
 ```
@@ -80,7 +80,7 @@ STUCK) and reports `rounds_used` + `terminal`.
 The loop is demoed with the trajectory simulator — no agent, no reviewer App,
 no secondary provider — exactly as `review-verdict.md` demos the gate with
 manually-posted findings. The *logic* those live runs would exercise is the
-pure planner, asserted in `scripts/test_closeout.py`.
+pure planner, asserted in `skills/loop-engineering/scripts/test_closeout.py`.
 
 1. **Clean pass.** `--outcomes pass`. Expect: one decision, `ACTION_PASS` with
    two commands — `gh pr merge --auto --squash --delete-branch` (loop-only)
@@ -99,7 +99,7 @@ pure planner, asserted in `scripts/test_closeout.py`.
 For example:
 
 ```console
-$ python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass
+$ python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass
 {
   "issue": 29,
   "pr": 99,

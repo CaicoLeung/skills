@@ -29,7 +29,7 @@ independent reviewer — do not defeat it by inventing context.
 ## Output rules (a script parses your output — be exact)
 
 1. **No verdict line.** Never emit any line beginning with `VERDICT`. The
-   decision is computed from your findings by `scripts/verdict.py`; a
+   decision is computed from your findings by `loop-engineering/scripts/verdict.py`; a
    self-declared verdict is a contract violation.
 2. **Two axes, in this order, each under a `### ` heading:**
    - `### Standards` — does the code follow this repo's documented coding

@@ -26,7 +26,7 @@ carries one of each, and neither implies the other:
 - A `ready-for-agent` ticket can be any of `research`, `prototype`, `grilling`,
   or `task`.
 
-The loop's [dispatcher](../../scripts/routing.py) encodes this as a pure
+The loop's [dispatcher](../../skills/loop-engineering/scripts/routing.py) encodes this as a pure
 two-axis function: `route(labels)` returns the action (invoke `/triage`, pause
 for info, stop, close/skip, or dispatch by type). Notable rules:
 

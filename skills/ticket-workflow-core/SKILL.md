@@ -144,9 +144,9 @@ GATE task:
 | prompt | a **fixed, system-authored** template the implementer never sees or edits | `skills/ticket-workflow-core/review-prompt.md` |
 | model | the **secondary model** on a **different provider** than the implementer | adapter (e.g. `paseo run --provider <secondary>`) |
 | workspace | a **separate isolated worktree** | adapter (`paseo worktree`) |
-| input | **diff + ticket spec only** — never the author's commit messages or PR prose | `scripts/reviewer.py build_review_prompt` (no author-prose parameter) |
+| input | **diff + ticket spec only** — never the author's commit messages or PR prose | `loop-engineering/scripts/reviewer.py build_review_prompt` (no author-prose parameter) |
 
-The reviewer emits **only** findings (no `VERDICT` line). `scripts/reviewer.py` is the runtime-neutral reviewer core: it renders the fixed template from diff + spec only, strips any self-declared verdict line (defense in depth), parses findings via `verdict.py` (single source of truth for the format), and formats the sha-tagged findings comment the reviewer's GitHub-App identity posts. The loop posts that comment; the `review-verdict` CI (T3) reads it and runs `verdict.py`.
+The reviewer emits **only** findings (no `VERDICT` line). `loop-engineering/scripts/reviewer.py` is the runtime-neutral reviewer core: it renders the fixed template from diff + spec only, strips any self-declared verdict line (defense in depth), parses findings via `loop-engineering/scripts/verdict.py` (single source of truth for the format), and formats the sha-tagged findings comment the reviewer's GitHub-App identity posts. The loop posts that comment; the `review-verdict` CI (T3) reads it and runs `loop-engineering/scripts/verdict.py`.
 
 **Runtime mapping:** Adapters invoke the secondary-model reviewer with the fixed prompt template (`review-prompt.md`) via the reviewer core (`reviewer.py`), in a separate worktree, on a different provider. Findings are transported as a sha-tagged PR comment from the reviewer's dedicated GitHub-App identity and evaluated by `verdict.py`. The CI check enforces the computed verdict. Reviewer independence ensures no agent can forge its own verdict (ADR-0007).
 

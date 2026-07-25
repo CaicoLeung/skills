@@ -52,8 +52,11 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import verdict  # noqa: E402
 
 
-REPO_ROOT = _SCRIPTS_DIR.parent
-DEFAULT_TEMPLATE = REPO_ROOT / "skills" / "ticket-workflow-core" / "review-prompt.md"
+# skills/loop-engineering/scripts -> skills/ (ticket-workflow-core is a sibling
+# skill). Resolves both in-repo and after an `npx skills add` install, where
+# the skill sits beside ticket-workflow-core in the agent's skills directory.
+_SKILLS_DIR = _SCRIPTS_DIR.parent.parent
+DEFAULT_TEMPLATE = _SKILLS_DIR / "ticket-workflow-core" / "review-prompt.md"
 
 # The two /code-review axes (ADR-0007). Findings are produced for both; the
 # verdict aggregates them — a CRITICAL/HIGH in either axis fails.

@@ -1,8 +1,15 @@
 """Unit tests for verdict.py (ADR-0007 derived verdict)."""
 
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import pytest
 
-from scripts.verdict import Finding, Severity, VerdictResult, derive_verdict
+from verdict import Finding, Severity, VerdictResult, derive_verdict  # noqa: E402
 
 
 @pytest.mark.unit

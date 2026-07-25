@@ -29,12 +29,12 @@ src/baz.py: OK
 - **Findings body** follows. One finding per line, two legal shapes:
   - `[file:line]: SEVERITY: summary` — `SEVERITY` ∈ `CRITICAL | HIGH | MEDIUM | LOW`.
   - `file: OK` — explicit coverage-floor ack for a clean file.
-- Prose lines that match neither shape are ignored by `scripts/verdict.py`, so a
+- Prose lines that match neither shape are ignored by `skills/loop-engineering/scripts/verdict.py`, so a
   human-readable heading is harmless — but keep the body mostly findings.
 
 ## How the check selects a current review
 
-`scripts/review_verdict.py` (run by the `review-verdict` job) does, on each PR:
+`skills/loop-engineering/scripts/review_verdict.py` (run by the `review-verdict` job) does, on each PR:
 
 1. Fetch the PR's issue comments and changed files (`gh`).
 2. Keep only comments authored by `REVIEWER_LOGIN` whose marker SHA **equals**
@@ -42,7 +42,7 @@ src/baz.py: OK
    against a full head).
 3. Of those, take the latest by `created_at`.
 4. Feed its findings body + the changed files to `derive_verdict`
-   (`scripts/verdict.py`).
+   (`skills/loop-engineering/scripts/verdict.py`).
 5. Exit with the verdict's code — the job's pass/fail *is* the
    `review-verdict` status check.
 

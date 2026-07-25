@@ -46,7 +46,7 @@ ready-for-agent + task
   ▼  loop-engineering (close-out half)
 independent /code-review (secondary model, separate worktree, diff + spec only)
   │
-  ▼  scripts/verdict.py — derived verdict (computed, never declared)
+  ▼  skills/loop-engineering/scripts/verdict.py — derived verdict (computed, never declared)
 pass?  ──yes──▶  loop enables auto-merge  →  GitHub merges (CI green)  →  Fixes #N closes the issue
   │
   no
@@ -61,15 +61,15 @@ findings handed to the SAME implementer verbatim  →  push  →  re-review
 | Route | `loop-engineering` | a dispatch decision (readiness gate + type) | the implement turn |
 | Implement | `/implement` (external) | a PR with `Fixes #N` | the close-out loop |
 | Review | `/code-review` (external, independent) | sha-tagged findings | the derived verdict |
-| Verdict | `scripts/verdict.py` | pass / fail | merge, or the fix loop |
+| Verdict | `skills/loop-engineering/scripts/verdict.py` | pass / fail | merge, or the fix loop |
 | Merge + close | `loop-engineering` | merged PR, closed issue | — |
 
 Commands (CI-safe — no agents, no network):
 
 ```bash
-python3 scripts/loop.py 28 --dry-run                                       # plan the implement turn
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass      # simulate the close-out
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail      # → STUCK_REVIEW
+python3 skills/loop-engineering/scripts/loop.py 28 --dry-run                                       # plan the implement turn
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass      # simulate the close-out
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail      # → STUCK_REVIEW
 ```
 
 See [`docs/agents/closeout.md`](./agents/closeout.md) for the close-out shape,

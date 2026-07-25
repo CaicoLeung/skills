@@ -11,9 +11,22 @@ selective-sync policy.
 
 ## Install
 
-Clone the whole repo — `loop-engineering` is driven by `scripts/loop.py`,
-`routing.py`, and `closeout.py`, so copying `skills/` alone leaves it pointing
-at nothing.
+Install all three skills into your agent (Claude Code, Codex, Cursor, pi,
+and 70+ others) via the open [`skills`](https://github.com/vercel-labs/skills)
+CLI:
+
+```bash
+npx skills add CaicoLeung/skills
+```
+
+The runtime scripts (`loop.py`, `routing.py`, `closeout.py`, `verdict.py`,
+`reviewer.py`) are vendored inside `skills/loop-engineering/scripts/`, so each
+skill is self-contained — no separate checkout needed. `tickets-to-paseo`
+reaches its reviewer through the sibling skill (`../loop-engineering/scripts/`),
+so install all three together (the default).
+
+For development, driving the loop locally, or replicating the CI gates, clone
+the whole repo:
 
 ```bash
 git clone https://github.com/CaicoLeung/skills.git
@@ -22,7 +35,9 @@ cd skills
 
 Prerequisites:
 
-- **Python 3** — runs `scripts/*.py` (zero third-party deps; CI uses `3.x`).
+- **Python 3** — runs the runtime scripts in `skills/loop-engineering/scripts/`
+  and the dev/CI tooling (`validate-skills.py`, `index-skills.py`) in `scripts/`
+  (zero third-party deps; CI uses `3.x`).
 - **[`gh` CLI](https://cli.github.com/)** — the loop reads ticket labels, posts
   comments, enables auto-merge, and closes issues through it. Run `gh auth login`
   first.

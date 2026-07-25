@@ -3,7 +3,7 @@ markers = [
     "unit: Unit tests (fast, isolated)",
     "integration: Integration tests (slower, may use external services)",
 ]
-testpaths = ["tests"]
+testpaths = ["skills/loop-engineering/scripts"]
 pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

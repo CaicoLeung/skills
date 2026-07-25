@@ -114,8 +114,8 @@ Core's `GATE` primitive maps to **two layers** (Paseo 0.1.110 has no daemon gate
 
 ```bash
 # (a) Render the FIXED, system-authored prompt from diff + spec ONLY.
-#     scripts/reviewer.py has NO parameter for commit messages or PR prose.
-prompt=$(python3 scripts/reviewer.py build-prompt \
+#     loop-engineering/scripts/reviewer.py has NO parameter for commit messages or PR prose.
+prompt=$(python3 skills/loop-engineering/scripts/reviewer.py build-prompt \
   --diff <(git diff "$base..$head") \
   --spec <(extract-ticket-spec "$issue") \
   --sha "$head" --changed-files <(git diff --name-only "$base..$head"))
@@ -126,7 +126,7 @@ paseo run --provider "$secondary_provider" --model "$secondary_model" \
   --worktree "review-$pr" --base "$head" --detach "$prompt" > reviewer.out
 
 # (c) Strip any verdict, check coverage, format the sha-tagged findings comment.
-python3 scripts/reviewer.py format-findings \
+python3 skills/loop-engineering/scripts/reviewer.py format-findings \
   --findings reviewer.out --sha "$head" \
   --changed-files <(git diff --name-only "$base..$head") > findings.md
 
@@ -136,7 +136,7 @@ python3 scripts/reviewer.py format-findings \
 GH_TOKEN="$REVIEWER_APP_TOKEN" gh pr comment "$pr" --body-file findings.md
 ```
 
-The reviewer emits **only** severity-tagged findings across the two axes (Standards, Spec) — never a `VERDICT` line. The verdict is *derived* from those findings by `scripts/verdict.py`. The same implementer then fixes against the findings handed to it verbatim; a finding is "resolved" only when it disappears from the next independent review (T5b).
+The reviewer emits **only** severity-tagged findings across the two axes (Standards, Spec) — never a `VERDICT` line. The verdict is *derived* from those findings by `loop-engineering/scripts/verdict.py`. The same implementer then fixes against the findings handed to it verbatim; a finding is "resolved" only when it disappears from the next independent review (T5b).
 
 **2. Enforcement layer (branch protection):** GitHub branch protection requires CI status check:
 

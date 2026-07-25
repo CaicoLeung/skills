@@ -21,8 +21,8 @@ not free-form natural-language instructions handed off in prose (see
 
 This skill is the **migration home** for those routine mechanical operations.
 It documents the loop's shape; the executable spine lives in
-[`scripts/loop.py`](../../scripts/loop.py) and the pure two-axis router in
-[`scripts/routing.py`](../../scripts/routing.py). Doing-skills (`/triage`,
+[`scripts/loop.py`](scripts/loop.py) and the pure two-axis router in
+[`scripts/routing.py`](scripts/routing.py). Doing-skills (`/triage`,
 `/implement`, `/research`, …) **stay external** — the loop *invokes* them; it
 never carries them (ADR-0001 selective-fork principle).
 
@@ -30,8 +30,8 @@ never carries them (ADR-0001 selective-fork principle).
 > issue #29) are wired: readiness gate + type dispatch open a PR carrying
 > `Fixes #N`, then the close-out loop drives independent review → derived
 > verdict → fix → merge → close. The pure close-out planner is
-> [`scripts/closeout.py`](../../scripts/closeout.py); the I/O driver lives in
-> [`scripts/loop.py`](../../scripts/loop.py) (`run_closeout_*`).
+> [`scripts/closeout.py`](scripts/closeout.py); the I/O driver lives in
+> [`scripts/loop.py`](scripts/loop.py) (`run_closeout_*`).
 
 ## The loop drives the agent; agents are leaves
 
@@ -47,7 +47,7 @@ of "script, not natural language."
 
 A claimed ticket is routed on two **orthogonal** label axes. The loop gates on
 the first, then dispatches on the second. The decision is a pure function,
-[`routing.route(labels)`](../../scripts/routing.py), so it is unit-testable and
+[`routing.route(labels)`](scripts/routing.py), so it is unit-testable and
 immune to the natural-language unreliability Loop Engineering exists to remove.
 
 ```
@@ -112,7 +112,7 @@ neither frame its own review (ADR-0007) nor author its own close text.
 For a `ready-for-agent` + `task` ticket, the loop:
 
 1. Plans an implement turn whose PR body is
-   [`loop.implement_pr_body(N)`](../../scripts/loop.py) → `Fixes #N`.
+   [`loop.implement_pr_body(N)`](scripts/loop.py) → `Fixes #N`.
 2. Invokes `/implement` (`paseo run --detach`) in a worktree off the base
    branch with a system-authored prompt that instructs the agent to use that
    body verbatim.
@@ -121,10 +121,10 @@ For a `ready-for-agent` + `task` ticket, the loop:
 ### Close-out half (T5b, issue #29)
 
 Once the PR is open, the close-out loop
-([`scripts/closeout.py`](../../scripts/closeout.py) planner +
-[`scripts/loop.py`](../../scripts/loop.py) driver) drives review → verdict →
+([`scripts/closeout.py`](scripts/closeout.py) planner +
+[`scripts/loop.py`](scripts/loop.py) driver) drives review → verdict →
 fix → merge → close. The decision is a pure function,
-[`closeout.plan_closeout(verdict, round)`](../../scripts/closeout.py):
+[`closeout.plan_closeout(verdict, round)`](scripts/closeout.py):
 
 4. **Invoke the independent reviewer** (loop-invoked, never the implementer):
    secondary model on a **different provider**, separate worktree, **diff +
@@ -132,16 +132,16 @@ fix → merge → close. The decision is a pure function,
    [`review-prompt.md`](../ticket-workflow-core/review-prompt.md) (ADR-0007 §2 —
    five independence axes).
 5. **Derive the verdict** from the reviewer's sha-tagged findings
-   ([`scripts/verdict.py`](../../scripts/verdict.py), ADR-0007) — computed,
+   ([`scripts/verdict.py`](scripts/verdict.py), ADR-0007) — computed,
    never declared. `pass = no CRITICAL/HIGH AND every changed file has a
    finding or OK`.
 6. **Fix loop.** On fail, hand the findings to the **same implementer**
-   *verbatim* ([`closeout.fix_prompt`](../../scripts/closeout.py) — no
+   *verbatim* ([`closeout.fix_prompt`](scripts/closeout.py) — no
    "resolve all issues" prose); it pushes; the loop re-reviews. A finding is
    "resolved" only when it disappears from the **next** review — never
    self-declared. The loop re-derives the verdict each round, so a finding
    that was not actually fixed reappears and the verdict stays fail.
-7. **Cap.** After [`closeout.MAX_REVIEW_ROUNDS`](../../scripts/closeout.py) (3)
+7. **Cap.** After [`closeout.MAX_REVIEW_ROUNDS`](scripts/closeout.py) (3)
    rounds without a pass, the loop escalates **`STUCK_REVIEW`** (chat room + a
    `gh issue comment`), leaves the PR **unmerged**, and does **not**
    auto-close. It never silently passes.
@@ -149,7 +149,7 @@ fix → merge → close. The decision is a pure function,
    enables GitHub auto-merge (`gh pr merge --auto`); GitHub merges when both
    `validate-skills` and `review-verdict` are green. The issue closes via
    `Fixes #N`, and the loop posts a
-   [`closeout.resolution_comment`](../../scripts/closeout.py) (dual close).
+   [`closeout.resolution_comment`](scripts/closeout.py) (dual close).
 
 ## Scope and escalation
 
@@ -165,14 +165,14 @@ stop-and-leave).
 
 ```bash
 # Routing half — plan a turn without side effects (CI-safe):
-python3 scripts/loop.py 28 --dry-run
+python3 skills/loop-engineering/scripts/loop.py 28 --dry-run
 
 # Close-out half — simulate a full trajectory (no agents, no network):
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass --dry-run
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail --dry-run  # → STUCK_REVIEW
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass --dry-run
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail --dry-run  # → STUCK_REVIEW
 
 # Close-out half — drive one live round for a PR (reviewer on a 2nd provider):
-python3 scripts/loop.py closeout 29 --pr 99 \
+python3 skills/loop-engineering/scripts/loop.py closeout 29 --pr 99 \
   --secondary-provider openai --secondary-model gpt-4o \
   --reviewer-login "$REVIEWER_LOGIN" --dry-run
 ```
@@ -180,9 +180,9 @@ python3 scripts/loop.py closeout 29 --pr 99 \
 The planners are pure and unit-tested:
 
 ```bash
-python3 scripts/test_routing.py     # two-axis router
-python3 scripts/test_loop.py        # routing turn-planning (T5a)
-python3 scripts/test_closeout.py    # close-out planner (T5b)
+python3 skills/loop-engineering/scripts/test_routing.py     # two-axis router
+python3 skills/loop-engineering/scripts/test_loop.py        # routing turn-planning (T5a)
+python3 skills/loop-engineering/scripts/test_closeout.py    # close-out planner (T5b)
 ```
 
 See [`docs/agents/closeout.md`](../../docs/agents/closeout.md) for the
