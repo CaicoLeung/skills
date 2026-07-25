@@ -251,6 +251,51 @@ def main() -> int:
             print(f"  FAIL expected empty plugins list, got {mp['plugins']!r}")
             failed += 1
 
+    # --- CI gating guard: the marketplace --check step stays wired in CI ------
+    # The branch-protection quality gate (ADR-0003) only blocks a stale
+    # marketplace because the `validate-skills` job runs `build-marketplace.py
+    # --check` (issue #46). A future PR that deletes or comments out that step
+    # would silently reopen the #41 phantom-plugin hole. This assertion makes
+    # such a deletion fail this test, which itself runs as a step in the same
+    # job, so removing the drift step turns this guard red. Coverage limit: a
+    # PR that deletes BOTH the drift step AND this test's step at once would
+    # stop the guard running at all — that same-PR deletion is out of reach for
+    # a same-job self-test and is left to human review (and the fact that the
+    # skills.py contexts<->jobs drift guard still requires the `validate-skills`
+    # job to exist). Mirrors that drift guard, which parses structurally; here
+    # we assert active (non-commented) lines so a commented-out step is caught
+    # too. The matches are intentionally literal: a script rename or step
+    # rewording is a conscious change this guard should surface, not absorb.
+    print("CI gating guard:")
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow = repo_root / ".github" / "workflows" / "validate-skills.yml"
+    if not workflow.exists():
+        print(f"  FAIL workflow not found: {workflow}")
+        failed += 1
+    else:
+        text = workflow.read_text(encoding="utf-8")
+        # Active lines: non-blank, not YAML comments. A step that is deleted OR
+        # commented out must both trip the guard.
+        active = [ln for ln in text.splitlines()
+                  if ln.strip() and not ln.lstrip().startswith("#")]
+        active_blob = "\n".join(active)
+        # The drift gate itself: fails the job when marketplace.json is stale.
+        if "build-marketplace.py --check" not in active_blob:
+            print("  FAIL validate-skills.yml has no active "
+                  "'build-marketplace.py --check' step (ADR-0003 gate, issue #46)")
+            failed += 1
+        # This test must keep running in CI, otherwise the guard above is dead.
+        if "test_marketplace.py" not in active_blob:
+            print("  FAIL validate-skills.yml no longer runs test_marketplace.py, "
+                  "so this guard would not execute in CI")
+            failed += 1
+        # The job name must equal the required status-check context name
+        # (skills.py drift guard asserts the same for every required context).
+        if not any(ln.strip() == "validate-skills:" for ln in active):
+            print("  FAIL validate-skills.yml job must be named 'validate-skills' "
+                  "to match the required status-check context (ADR-0003)")
+            failed += 1
+
     # --- Summary -------------------------------------------------------------
     if failed:
         print(f"\n{failed} marketplace test(s) failed.", file=sys.stderr)

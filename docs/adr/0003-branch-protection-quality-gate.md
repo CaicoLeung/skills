@@ -34,7 +34,7 @@ gh api -X PUT repos/CaicoLeung/skills/branches/main/protection \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["validate-skills"]
+    "contexts": ["validate-skills", "review-verdict"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {},
@@ -46,9 +46,31 @@ EOF
 ```
 
 **Key points:**
-- `contexts: ["validate-skills"]` — the CI workflow from issue #3
+- `contexts: ["validate-skills", "review-verdict"]` — see [Required status-check contexts](#required-status-check-contexts-source-of-truth) below
 - `strict: true` — require updates to the base branch before merge
 - `enforce_admins: true` — admins cannot bypass without approval
+
+### Required status-check contexts (source of truth)
+
+Each required context is a workflow *job* whose name equals the context name. The
+`scripts/skills.py` drift guard asserts this 1:1 mapping — a required context with no
+matching job name fails `validate-skills.py`, and a job whose name no longer matches a
+required context is flagged. Add or remove a context here and in branch protection
+together.
+
+| Context | Workflow job | Enforces |
+| --- | --- | --- |
+| `validate-skills` | `.github/workflows/validate-skills.yml → validate-skills` | Skill frontmatter conformance (ADR-0002); `skills/INDEX.md` up-to-date; `.claude-plugin/marketplace.json` up-to-date (the **marketplace drift gate**, issue #46, generator from #44/#47); and the script test suites (`test_marketplace`, `test_routing`, `test_reviewer`, `test_loop`, `test_review_verdict`, `test_closeout`). |
+| `review-verdict` | `.github/workflows/review-verdict.yml → review-verdict` | Derived verdict from the reviewer's findings equals `approved` (ADR-0007). |
+
+**Marketplace drift gate (#46).** The marketplace check rides as a *step* inside the
+`validate-skills` job (`python3 scripts/build-marketplace.py --check`), so a stale
+`.claude-plugin/marketplace.json` fails the already-required `validate-skills` context
+and blocks merge — no separate context is warranted. A regression test
+(`scripts/test_marketplace.py → CI gating guard`) fails if that step is removed or
+commented out, so the drift step resists silent deletion (the residual limit — a PR
+that deletes both the drift step and the test step at once — is left to human review;
+the `skills.py` contexts↔jobs drift guard still requires the `validate-skills` job).
 
 ### 3. Gate enforcement location
 
@@ -103,7 +125,7 @@ gh api -X PUT repos/CaicoLeung/skills/branches/main/protection \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["validate-skills"]
+    "contexts": ["validate-skills", "review-verdict"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {},
