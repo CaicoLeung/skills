@@ -18,6 +18,16 @@
       ]
     },
     {
+      "name": "setup-pre-commit",
+      "source": "./skills/setup-pre-commit",
+      "description": "Set up Husky pre-commit hooks with lint-staged (Prettier), type checking, and tests in the current repo. Use when user wants to add pre-commit hooks, set up Husky, configure lint-staged, or add commit-time formatting/typechecking/testing.",
+      "version": "0.1.0",
+      "strict": false,
+      "skills": [
+        "./"
+      ]
+    },
+    {
       "name": "ticket-workflow-core",
       "source": "./skills/ticket-workflow-core",
       "description": "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision.",
