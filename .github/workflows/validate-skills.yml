@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  # The branch-protection drift guard (ADR-0003) reads the required status-check
-  # contexts via the GitHub REST admin endpoint; read-only, degrades gracefully
-  # (403 -> skip) on fork PRs whose token cannot reach it.
-  administration: read
 
 jobs:
   validate-skills:
@@ -25,6 +21,10 @@ jobs:
       - name: Validate skill frontmatter (ADR-0002)
         run: python3 scripts/validate-skills.py
       - name: Check branch-protection drift guard (ADR-0003)
+        # The default GITHUB_TOKEN cannot read branch protection (the
+        # `administration` scope is not grantable via the `permissions:` block),
+        # so this degrades to a graceful skip in CI — a visible, dedicated home
+        # for the gate that enforces when run with a token that has admin read.
         run: python3 scripts/branch_protection.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
