@@ -53,6 +53,28 @@ def _normalize_path(path: str) -> str:
     return posixpath.normpath(path.replace("\\", "/"))
 
 
+def _strip_surrounding_backticks(text: str) -> str:
+    """Strip at most a single pair of surrounding backticks from a line.
+
+    Belt-and-braces defense (ADR-0007): a reviewer may copy the exact line
+    shapes shown in the review-prompt template, which are now presented inside
+    a fenced code block. The template alone cannot fully prevent models from
+    wrapping a finding or OK line in a pair of backticks. This function
+    tolerates that so the parser still derives the correct verdict.
+
+    Only a *single* pair is stripped (`` `text` ``). Fenced-code-block
+    backticks (triple or more) are left intact — they cannot be a valid
+    finding or OK line regardless.
+    """
+    s = text.strip()
+    if len(s) >= 2 and s.startswith("`") and s.endswith("`"):
+        # Only strip one pair: `` `foo` `` → ``foo``, but ``` ``foo`` ```
+        # (which starts and ends with at least two backticks) is left alone.
+        if not (s.startswith("``") or s.endswith("``")):
+            s = s[1:-1].strip()
+    return s
+
+
 @dataclass(frozen=True)
 class Finding:
     """A code-review finding."""
@@ -72,15 +94,20 @@ class Finding:
             file:line: SEVERITY: summary
             [file:line]: SEVERITY: summary
 
+        As a belt-and-braces defence, also tolerates a single pair of
+        surrounding backticks on the line (a model wrapping the literal syntax
+        in markdown emphasis).
+
         Returns ``None`` for anything that is not a finding (including an
         explicit ``file: OK``), so the caller can fall through to OK parsing.
         """
+        stripped = _strip_surrounding_backticks(line)
         pattern = (
             r"^\[?(?P<file>[^:\[\]]+)"
             r"(?::(?P<line>\d+))?"
             r"\]?:\s*(?P<severity>[A-Z]+):\s*(?P<summary>.+)$"
         )
-        match = re.match(pattern, line.strip())
+        match = re.match(pattern, stripped)
         if not match:
             return None
 
@@ -168,8 +195,10 @@ def derive_verdict(
             continue
 
         # Check for explicit OK: 'file: OK' (robust to whitespace)
+        # Also tolerates a single pair of surrounding backticks.
         # Only treat as OK if finding parsing failed
-        ok_match = OK_RE.match(line)
+        ok_line = _strip_surrounding_backticks(line)
+        ok_match = OK_RE.match(ok_line)
         if ok_match:
             ok_file = _normalize_path(ok_match.group(1))
             explicitly_ok_files.add(ok_file)

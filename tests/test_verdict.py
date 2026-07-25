@@ -461,3 +461,114 @@ def test_to_dict_surfaces_findings_and_changed_files():
     assert out["findings"][0]["line"] == 7
     assert out["blocking_issues"][0]["file"] == "src/main.py"
     assert out["changed_files"] == ["src/main.py", "src/util.py"]
+
+
+# --- Backtick tolerance (belt-and-braces) ------------------------------------
+# A model may wrap a finding or OK line in a single pair of backticks even
+# when the template shows the literal syntax in a fenced code block. The
+# parser tolerates this so the gate does not produce false coverage-gap FAILs.
+
+
+@pytest.mark.unit
+def test_clean_ok_parses():
+    """Plain `file: OK` passes (baseline)."""
+    result = derive_verdict("src/main.py: OK", ["src/main.py"])
+    assert result.passed is True
+    assert len(result.coverage_gaps) == 0
+
+
+@pytest.mark.unit
+def test_backtick_wrapped_ok_parses():
+    """Backtick-wrapped `file: OK` parses same as plain."""
+    result = derive_verdict("`src/main.py: OK`", ["src/main.py"])
+    assert result.passed is True
+    assert len(result.coverage_gaps) == 0
+
+
+@pytest.mark.unit
+def test_clean_finding_parses():
+    """Plain `[file:line]: SEVERITY: summary` parses (baseline)."""
+    result = derive_verdict("[src/main.py:42]: HIGH: null deref", ["src/main.py"])
+    assert result.passed is False
+    assert len(result.blocking_issues) == 1
+    assert result.blocking_issues[0].severity == Severity.HIGH
+    assert result.blocking_issues[0].line == 42
+
+
+@pytest.mark.unit
+def test_backtick_wrapped_finding_parses():
+    """Backtick-wrapped finding parses same as plain."""
+    result = derive_verdict("`[src/main.py:42]: HIGH: null deref`", ["src/main.py"])
+    assert result.passed is False
+    assert len(result.blocking_issues) == 1
+    assert result.blocking_issues[0].severity == Severity.HIGH
+    assert result.blocking_issues[0].line == 42
+
+
+@pytest.mark.unit
+def test_backtick_wrapped_ok_and_finding_same_verdict():
+    """Both backtick-wrapped OK and finding derive same verdict as unwrapped forms."""
+    # Unwrapped: two files covered, one HIGH -> FAIL
+    unwrapped = derive_verdict(
+        "src/main.py: OK\n`[src/utils.py:15]: HIGH: bad logic`",
+        ["src/main.py", "src/utils.py"],
+    )
+    # Backtick-wrapped OK too: same verdict
+    wrapped = derive_verdict(
+        "`src/main.py: OK`\n`[src/utils.py:15]: HIGH: bad logic`",
+        ["src/main.py", "src/utils.py"],
+    )
+
+    assert unwrapped.passed == wrapped.passed == False
+    assert len(unwrapped.blocking_issues) == len(wrapped.blocking_issues) == 1
+    assert unwrapped.coverage_gaps == wrapped.coverage_gaps == ()
+
+
+@pytest.mark.unit
+def test_backtick_wrapped_unbracketed_finding():
+    """Backtick-wrapped finding without brackets also parses."""
+    result = derive_verdict(
+        "`src/main.py:42: MEDIUM: consider refactor`",
+        ["src/main.py"],
+    )
+    assert result.passed is True  # MEDIUM is non-blocking
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == Severity.MEDIUM
+    assert result.findings[0].line == 42
+
+
+@pytest.mark.unit
+def test_triple_backtick_not_stripped():
+    """Triple-backtick-wrapped lines are NOT stripped — can't be valid syntax."""
+    result = derive_verdict(
+        "```src/main.py: OK```",
+        ["src/main.py"],
+    )
+    # Triple backticks are not stripped, so the line cannot match OK or finding
+    # -> src/main.py becomes a coverage gap -> FAIL
+    assert result.passed is False
+    assert "src/main.py" in result.coverage_gaps
+
+
+@pytest.mark.unit
+def test_double_backtick_not_stripped():
+    """Double-backtick-wrapped lines are NOT stripped."""
+    result = derive_verdict(
+        "``src/main.py: OK``",
+        ["src/main.py"],
+    )
+    # Double backticks are not stripped -> coverage gap
+    assert result.passed is False
+    assert "src/main.py" in result.coverage_gaps
+
+
+@pytest.mark.unit
+def test_backtick_wrapped_with_inner_whitespace():
+    """Backtick-wrapped OK with whitespace inside backticks still parses."""
+    result = derive_verdict(
+        "`  src/main.py: OK  `",
+        ["src/main.py"],
+    )
+    # Inner whitespace between backtick and content is stripped after unwrap
+    assert result.passed is True
+    assert len(result.coverage_gaps) == 0
