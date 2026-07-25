@@ -71,7 +71,7 @@ def _strip_surrounding_backticks(text: str) -> str:
         # Only strip one pair: `` `foo` `` → ``foo``, but ``` ``foo`` ```
         # (which starts and ends with at least two backticks) is left alone.
         if not (s.startswith("``") or s.endswith("``")):
-            s = s[1:-1]
+            s = s[1:-1].strip()
     return s
 
 

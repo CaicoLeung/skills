@@ -560,3 +560,15 @@ def test_double_backtick_not_stripped():
     # Double backticks are not stripped -> coverage gap
     assert result.passed is False
     assert "src/main.py" in result.coverage_gaps
+
+
+@pytest.mark.unit
+def test_backtick_wrapped_with_inner_whitespace():
+    """Backtick-wrapped OK with whitespace inside backticks still parses."""
+    result = derive_verdict(
+        "`  src/main.py: OK  `",
+        ["src/main.py"],
+    )
+    # Inner whitespace between backtick and content is stripped after unwrap
+    assert result.passed is True
+    assert len(result.coverage_gaps) == 0
