@@ -1,9 +1,9 @@
 # ADR-0007: Derived verdict and reviewer independence
 
-- **Status:** Superseded
+- **Status:** Partially superseded
 - **Date:** 2026-07-24
 - **Supersedes:** —
-- **Superseded by:** [ADR-0011](./0011-agent-skill-product-reframe.md) (2026-07-26) — in-repo implementation decision; reference implementation retired, discipline survives in the skills.
+- **Superseded by:** [ADR-0013](./0013-ci-gate-optional-local-verdict-gates.md) (2026-07-27) — the CI-gate half (§3–§4: verdict as exclusively CI-computed, `review-verdict` a required context) is void; the driver's local derivation gates. The verdict-computation + reviewer-independence core (§1–§2) is **in force** (the driver was restored by [ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md), which superseded ADR-0011).
 - **Related:** [ADR-0003](./0003-branch-protection-quality-gate.md), [ADR-0004](./0004-runtime-neutral-core-plus-adapter.md), [ADR-0005](./0005-auto-merge-via-branch-protection.md), [ADR-0006](./0006-supervisor-and-merged-and-gated-completion.md)
 
 ## Context

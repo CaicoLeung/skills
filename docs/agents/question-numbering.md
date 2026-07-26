@@ -2,9 +2,10 @@
 
 How a skill asks the user questions so every question is numbered, every option
 is numbered, and any past question is referenceable by number. The convention
-is recorded as [ADR-0009](../adr/0009-question-numbering-convention.md) and
-machine-enforced for skills authored in this repo by
-`scripts/validate-skills.py` (the existing `validate-skills` CI gate).
+is recorded as [ADR-0009](../adr/0009-question-numbering-convention.md). The
+skill-frontmatter enforcement was retired in
+[ADR-0012](../adr/0012-reverse-skill-reframe-loop-driver-tool.md); the
+convention now binds the Loop Driver's `grilling`-type dispatch.
 
 ## When it binds
 

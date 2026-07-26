@@ -5,13 +5,14 @@
 - **Supersedes:** —
 - **Amends:** [ADR-0002](./0002-skill-frontmatter-contract.md) (adds one optional frontmatter field)
 - **Related:** [ADR-0008](./0008-script-driven-loop-driver-and-type-aware-routing.md) (the dispatch hook lives in the loop driver)
+- **Partially superseded by:** [ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md) (the skill-frontmatter field is voided; the numbering convention survives as a driver concern)
 
-> **Realization note (2026-07-26).** This convention is unchanged and is still
-> enforced by `scripts/validate-skills.py` + `scripts/test_skills.py`. The
-> *loop-driver dispatch hook* (`scripts/loop.py`) and the `test_routing.py` /
-> `test_reviewer.py` companions it cited are retired — see
-> [ADR-0011](./0011-agent-skill-product-reframe.md). The convention applies to
-> any interviewing skill the consumer dispatches, not only the retired loop.
+> **Realization note (2026-07-27).** The skill-frontmatter field this ADR added
+> is voided — the skill surface was deleted ([ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md)).
+> The numbering *convention* survives, now as a driver concern: the Loop Driver
+> applies it to the `grilling`-type tickets it dispatches, and it is documented
+> in [`docs/agents/question-numbering.md`](../agents/question-numbering.md).
+> The loop-driver dispatch hook (`scripts/loop.py`) is restored under ADR-0012.
 
 ## Context
 

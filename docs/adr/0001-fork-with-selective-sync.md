@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-23
 - **Supersedes:** —
+- **Partially superseded by:** [ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md) (the "fork" framing is withdrawn — this repo is built *on top of* `mattpocock/skills`, not a fork of it)
 
 ## Context
 

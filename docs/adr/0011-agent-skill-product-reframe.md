@@ -1,6 +1,6 @@
 # ADR-0011: This repo is an Agent Skill product; the reference implementation is retired
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md)
 - **Date:** 2026-07-26
 - **Supersedes:** ADR-0003, ADR-0005, ADR-0006, ADR-0007, ADR-0008, ADR-0010
 

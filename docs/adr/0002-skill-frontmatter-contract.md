@@ -4,6 +4,7 @@
 - **Date:** 2026-07-23
 - **Supersedes:** —
 - **Amended by:** [ADR-0009](./0009-question-numbering-convention.md) (adds the optional `asks-user-questions` boolean field, bare-boolean scalar coercion in the parser, and its body-reference rule)
+- **Voided by:** [ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md) (the skill surface is deleted — there is no frontmatter left to contract)
 
 ## Context
 

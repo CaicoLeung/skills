@@ -1,23 +1,23 @@
 # NOTICE
 
-This repository (`CaicoLeung/skills`) is a **selective fork** of
-[mattpocock/skills](https://github.com/mattpocock/skills) ("Skills for Real
-Engineers"), licensed under the MIT License.
+This repository (`CaicoLeung/skills` — pending rename, see
+[issue #64](https://github.com/CaicoLeung/skills/issues/64)) is the **Loop
+Driver**, a tool built **on top of** [`mattpocock/skills`](https://github.com/mattpocock/skills)
+("Skills for Real Engineers"). It is *not* a fork: there is no selective sync
+of upstream's tree (ADR-0001's "fork" framing was withdrawn in
+[ADR-0012](docs/adr/0012-reverse-skill-reframe-loop-driver-tool.md)). The Loop
+Driver consumes the issues `mattpocock/skills`'s `to-spec` / `to-tickets`
+generate and drives them to completion.
+
+This repo is licensed under the MIT License.
 
 ## Upstream attribution
 
 - **Upstream:** https://github.com/mattpocock/skills
 - **License:** MIT — `Copyright (c) 2026 Matt Pocock` (see `LICENSE`)
-- **Remote:** `upstream` points at the source of truth; see
-  [ADR-0001](docs/adr/0001-fork-with-selective-sync.md).
-
-## Nature of this fork
-
-This is **not** a wholesale mirror. Only selected skills and documentation are
-carried; the rest of upstream's tree is intentionally absent. The relationship
-is managed by a documented selective-sync strategy (upstream `remote` for
-fetching, a local override layer in `docs/agents/*` for this fork's own
-conventions). See ADR-0001 for the full rationale.
+- **Remote:** `upstream` points at `mattpocock/skills`; this repo carries
+  material originating there under MIT, and credits that copyright as the
+  license requires.
 
 ## Contributions
 
