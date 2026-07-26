@@ -20,6 +20,14 @@ jobs:
           python-version: "3.x"
       - name: Validate skill frontmatter (ADR-0002)
         run: python3 scripts/validate-skills.py
+      - name: Check branch-protection drift guard (ADR-0003)
+        # The default GITHUB_TOKEN cannot read branch protection (the
+        # `administration` scope is not grantable via the `permissions:` block),
+        # so this degrades to a graceful skip in CI — a visible, dedicated home
+        # for the gate that enforces when run with a token that has admin read.
+        run: python3 scripts/branch_protection.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check skills index is up to date
         run: python3 scripts/index-skills.py --check
       - name: Check marketplace is up to date
@@ -38,3 +46,5 @@ jobs:
         run: python3 scripts/test_review_verdict.py
       - name: Run close-out loop planner tests (ADR-0008 §5 / T5b)
         run: python3 scripts/test_closeout.py
+      - name: Run branch-protection drift-guard tests (ADR-0003)
+        run: python3 scripts/test_branch_protection.py

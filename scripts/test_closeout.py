@@ -213,79 +213,80 @@ def main() -> int:
         failed,
     )
 
-    # closeout_commands emits auto-merge ONLY on PASS; FIX/REVIEW emit paseo run,
-    # STUCK emits a comment — never a merge.
-    pass_cmds = closeout.closeout_commands(
+    # closeout_plan emits auto-merge ONLY on PASS (a loop-owned gh_command);
+    # REVIEW/FIX return run INTENT (no shell command), STUCK a comment.
+    pass_plan = closeout.closeout_plan(
         closeout.plan_closeout(_verdict(closeout.VERDICT_PASS), round=1),
-        "CaicoLeung/skills", 29, 42, "https://x/pull/42", "main",
-        reviewer_workspace="issue-42-review", implementer_workspace="issue-42-implement",
+        "CaicoLeung/skills", 29, 42,
     )
     _check(
-        any(c[:3] == ["gh", "pr", "merge"] and "--auto" in c for c in pass_cmds),
-        "PASS -> closeout_commands must emit an auto-merge",
+        any(c[:3] == ["gh", "pr", "merge"] and "--auto" in c for c in pass_plan.gh_commands),
+        "PASS -> closeout_plan must emit an auto-merge in gh_commands",
         failed,
     )
+    _check(pass_plan.run is None, "PASS carries no run intent (gh-owned only)", failed)
 
-    fix_cmds = closeout.closeout_commands(
+    fix_plan = closeout.closeout_plan(
         closeout.plan_closeout(_verdict(closeout.VERDICT_FAIL, FINDINGS), round=1),
-        "CaicoLeung/skills", 29, 42, "https://x/pull/42", "main",
-        reviewer_workspace="issue-42-review", implementer_workspace="issue-42-implement",
+        "CaicoLeung/skills", 29, 42,
     )
+    # The pure builder emits NO shell command for FIX — only run intent. The
+    # driver shapes the paseo run (workspace/provider) from cfg; that shaping
+    # is asserted in test_loop.py's closeout_decision_commands coverage.
     _check(
-        not any(c[:3] == ["gh", "pr", "merge"] for c in fix_cmds),
-        "FIX must not emit any merge command (implementer never merges)",
+        fix_plan.gh_commands == [],
+        "FIX carries no gh_commands (intent only — driver owns the paseo shell)",
         failed,
     )
     _check(
-        any(c[0] == "paseo" and "--worktree" in c for c in fix_cmds),
-        "FIX must emit a paseo run in the implementer's worktree",
+        fix_plan.run is not None and fix_plan.run.kind == closeout.ACTION_FIX,
+        "FIX intent kind is ACTION_FIX",
         failed,
     )
-    # And the FIX command's prompt carries the findings verbatim.
-    fix_prompt_argv = [c for c in fix_cmds if c[0] == "paseo"]
     _check(
-        fix_prompt_argv and FINDINGS in fix_prompt_argv[-1][-1],
-        "FIX paseo run prompt must carry the findings verbatim",
+        fix_plan.run is not None and FINDINGS in fix_plan.run.prompt,
+        "FIX intent prompt must carry the findings verbatim",
         failed,
     )
-    # The FIX run uses the IMPLEMENTER worktree (same agent — holds context).
     _check(
-        any("issue-42-implement" in c for c in fix_cmds),
-        "FIX must run in the implementer's worktree (same agent fixes)",
+        fix_plan.run is not None and "do not self-declare" in fix_plan.run.prompt,
+        "FIX intent prompt forbids self-declared resolution",
         failed,
     )
 
-    stuck_cmds = closeout.closeout_commands(
+    stuck_plan = closeout.closeout_plan(
         closeout.plan_closeout(_verdict(closeout.VERDICT_FAIL), round=closeout.MAX_REVIEW_ROUNDS),
-        "CaicoLeung/skills", 29, 42, "https://x/pull/42", "main",
-        reviewer_workspace="issue-42-review", implementer_workspace="issue-42-implement",
+        "CaicoLeung/skills", 29, 42,
     )
     _check(
-        not any(c[:3] == ["gh", "pr", "merge"] for c in stuck_cmds),
+        not any(c[:3] == ["gh", "pr", "merge"] for c in stuck_plan.gh_commands),
         "STUCK must not emit a merge command (PR left unmerged)",
         failed,
     )
     _check(
-        any(c[:3] == ["gh", "issue", "comment"] for c in stuck_cmds),
+        any(c[:3] == ["gh", "issue", "comment"] for c in stuck_plan.gh_commands),
         "STUCK must post an issue comment (escalation)",
         failed,
     )
+    _check(stuck_plan.run is None, "STUCK carries no run intent (gh-owned only)", failed)
 
-    review_cmds = closeout.closeout_commands(
+    review_plan = closeout.closeout_plan(
         closeout.plan_closeout(_verdict(closeout.VERDICT_MISSING), round=0),
-        "CaicoLeung/skills", 29, 42, "https://x/pull/42", "main",
-        reviewer_workspace="issue-42-review", implementer_workspace="issue-42-implement",
+        "CaicoLeung/skills", 29, 42,
     )
     _check(
-        not any(c[:3] == ["gh", "pr", "merge"] for c in review_cmds),
-        "REVIEW must not emit a merge command",
+        review_plan.gh_commands == [],
+        "REVIEW carries no gh_commands (intent only — driver owns the paseo shell)",
         failed,
     )
-    # The reviewer runs in a SEPARATE worktree (independence axis 4) — not the
-    # implementer's.
     _check(
-        any("issue-42-review" in c and "issue-42-implement" not in c for c in review_cmds),
-        "REVIEW must run in the reviewer's separate worktree, not the implementer's",
+        review_plan.run is not None and review_plan.run.kind == closeout.ACTION_REVIEW,
+        "REVIEW intent kind is ACTION_REVIEW",
+        failed,
+    )
+    _check(
+        review_plan.run is not None and "review-prompt.md" in review_plan.run.prompt,
+        "REVIEW intent prompt is the placeholder (driver enriches with diff+spec)",
         failed,
     )
 

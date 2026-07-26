@@ -72,7 +72,7 @@ inline (its pure core is already unit-tested; `main()` stays an I/O shell).
 
 The gateway owns **reads**. Writes (`gh pr merge --auto`, `gh issue comment`,
 `gh issue close`) continue to be emitted as pure command *lists* by
-`closeout.closeout_commands` and the routing driver, and executed by the
+`closeout.closeout_plan` and the routing driver, and executed by the
 driver's injected `runner`. Folding writes into the gateway was considered and
 rejected (see below).
 
@@ -100,7 +100,7 @@ no `gh` and no network — the paths the suite previously disclaimed.
 ## Rejected alternatives
 
 - **Reads + writes in the gateway.** Writes are already a clean, tested seam:
-  `closeout.closeout_commands` emits them as pure command-list *data*, the
+  `closeout.closeout_plan` emits them as pure command-list *data*, the
   driver's `runner` executes them, and `--dry-run` asserts on the list verbatim.
   That "command-as-data" property is load-bearing — the dry-run preview and the
   pure-builder unit tests both depend on writes being values, not executed
@@ -167,5 +167,7 @@ merge.
   `GhCliReader` + the single CLI catch).
 - New tests: `FakeGitHubReader` + driver coverage in `scripts/test_loop.py`
   and `scripts/test_closeout.py`.
-- No change to writes: `closeout.closeout_commands`, the `runner` injection,
-  and the dry-run contract are unchanged.
+- No change to writes: the close-out command-list builders (then `closeout.closeout_commands`;
+  issue #52 later renamed it `closeout_plan` to return intent, with the driver
+  building the command list — the write-stays-command-data principle this ADR
+  argues for is unchanged), the `runner` injection, and the dry-run contract.

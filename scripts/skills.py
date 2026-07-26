@@ -14,12 +14,8 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,120 +40,6 @@ DESCRIPTION_MAX = 300
 # (ADR-0009). Checked as a path substring so a relative link, a bare path, or a
 # markdown link all satisfy it.
 CONVENTION_DOC_REF = "docs/agents/question-numbering.md"
-
-
-# --- Branch protection drift guard ------------------------------------------
-
-
-def _extract_workflow_job_names(workflows_dir: Path) -> set[str]:
-    """Extract top-level job names from all workflow YAML files."""
-    jobs: set[str] = set()
-    if not workflows_dir.exists():
-        return jobs
-
-    for wf_file in workflows_dir.glob("*.yml"):
-        content = wf_file.read_text(encoding="utf-8")
-        lines = content.splitlines()
-
-        in_jobs = False
-        jobs_indent = None
-        for raw in lines:
-            stripped = raw.strip()
-            if stripped == "jobs:":
-                in_jobs = True
-                jobs_indent = len(raw) - len(raw.lstrip())
-                continue
-
-            if in_jobs and raw.strip():
-                current_indent = len(raw) - len(raw.lstrip())
-                # Exit jobs section on same-level or less-indented top-level key
-                if current_indent <= jobs_indent and ":" in raw:
-                    in_jobs = False
-                    continue
-
-                # Job name: exactly one level deeper than jobs:
-                if in_jobs and ":" in raw:
-                    # Must be directly under jobs: (one level of indentation)
-                    line_indent = len(raw) - len(raw.lstrip())
-                    if line_indent == jobs_indent + 2:
-                        potential = raw.strip().split(":", 1)[0].strip()
-                        if potential and not potential.startswith("#"):
-                            jobs.add(potential)
-
-    return jobs
-
-
-def _get_branch_protection_contexts(repo: str = "CaicoLeung/skills") -> list[str]:
-    """Fetch required status check contexts from branch protection via GitHub REST API.
-
-    Uses GITHUB_TOKEN for auth. Falls back gracefully if unavailable.
-    """
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        return []
-
-    try:
-        req = urllib.request.Request(
-            f"https://api.github.com/repos/{repo}/branches/main/protection",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            contexts = data.get("required_status_checks", {}).get("contexts", [])
-            return contexts
-    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as e:
-        # 404 = no protection configured, 403/401 = insufficient permissions
-        if isinstance(e, urllib.error.HTTPError) and e.code in (404, 403, 401):
-            return []  # No/unknown protection or no access = no contexts to check
-        # In CI, fail loudly; locally, skip gracefully
-        if os.environ.get("CI"):
-            raise RuntimeError(f"Failed to fetch branch protection: {e}") from e
-        return []
-
-
-def _validate_branch_protection(repo_root: Path) -> list[str]:
-    """Validate that each branch protection context has a matching workflow job name."""
-    errors: list[str] = []
-    workflows_dir = repo_root / ".github" / "workflows"
-
-    job_names = _extract_workflow_job_names(workflows_dir)
-    if not job_names:
-        errors.append("no workflow job names found in .github/workflows/*.yml")
-
-    contexts = _get_branch_protection_contexts()
-    if not contexts:
-        # In CI, empty contexts means the API call failed (already raised above)
-        # Locally, might not be authenticated — skip this check gracefully
-        return errors
-
-    for ctx in contexts:
-        if ctx not in job_names:
-            errors.append(
-                f"branch protection requires context '{ctx}' "
-                f"but no workflow job has that name (found: {sorted(job_names)})"
-            )
-
-    return errors
-
-
-def _validate_branch_protection_info(repo_root: Path) -> list[str]:
-    """Return informational messages about branch protection (non-failing)."""
-    info: list[str] = []
-    workflows_dir = repo_root / ".github" / "workflows"
-    job_names = _extract_workflow_job_names(workflows_dir)
-
-    contexts = _get_branch_protection_contexts()
-    if contexts:
-        orphan_jobs = job_names - set(contexts)
-        if orphan_jobs:
-            info.append(
-                f"note: workflow job(s) {sorted(orphan_jobs)} not required by branch protection"
-            )
-
-    return info
 
 
 @dataclass
@@ -433,20 +315,6 @@ def cmd_validate(args) -> int:
         print(f"\n{len(failed)} skill(s) failed validation.", file=sys.stderr)
         return 1
     print(f"\n{len(skills)} skill(s) valid.")
-
-    # Branch protection drift guard
-    repo_root = skills_root.parent
-    protection_errors = _validate_branch_protection(repo_root)
-    if protection_errors:
-        print("\nBranch protection guard:", file=sys.stderr)
-        for e in protection_errors:
-            print(f"  - {e}", file=sys.stderr)
-        return 1
-
-    # Info-only messages (don't fail)
-    for msg in _validate_branch_protection_info(repo_root):
-        print(f"  {msg}")
-
     return 0
 
 
@@ -496,86 +364,6 @@ def cmd_index(args) -> int:
     return 0
 
 
-# --- Marketplace JSON generation (ADR-0002 frontmatter → plugin entries) ----
-
-
-def _fatal(msg: str) -> None:
-    """Print error to stderr and exit with code 2."""
-    print(msg, file=sys.stderr)
-    sys.exit(2)
-
-
-def _load_marketplace_config(config_path: Path) -> dict:
-    """Load marketplace-level config or exit with a clear error."""
-    if not config_path.exists():
-        _fatal(f"error: marketplace config not found: {config_path}")
-    try:
-        with open(config_path, encoding="utf-8") as fh:
-            config = json.load(fh)
-    except json.JSONDecodeError as exc:
-        _fatal(f"error: invalid JSON in {config_path}: {exc}")
-    for key in ("name", "owner", "metadata"):
-        if key not in config:
-            _fatal(f"error: {config_path} missing required key '{key}'")
-    owner = config.get("owner", {})
-    if not isinstance(owner, dict) or not owner.get("name"):
-        _fatal(f"error: {config_path} owner.name is required")
-    if "description" not in config.get("metadata", {}):
-        _fatal(f"error: {config_path} metadata.description is required")
-    return config
-
-
-def render_marketplace(skills_root: Path, config: dict) -> str:
-    """Generate marketplace.json from config + conforming skills' frontmatter."""
-    skills = [s for s in discover(skills_root) if not s.errors]
-    defaults = config.get("plugin_defaults", {})
-    strict = defaults.get("strict", False)
-    skills_val = defaults.get("skills", ["./"])
-    plugins = []
-    for s in skills:
-        m = s.meta
-        plugins.append({
-            "name": m["name"],
-            "source": f"./skills/{m['name']}",
-            "description": m["description"],
-            "version": m["version"],
-            "strict": strict,
-            "skills": skills_val,
-        })
-    # Sort plugins by name for deterministic output.
-    plugins.sort(key=lambda p: p["name"])
-    marketplace = {
-        "name": config["name"],
-        "owner": config["owner"],
-        "metadata": config["metadata"],
-        "plugins": plugins,
-    }
-    return json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
-
-
-def cmd_marketplace(args) -> int:
-    repo_root = Path(args.root).resolve().parent
-    config_path = Path(args.config) if args.config else repo_root / ".claude-plugin" / "marketplace-config.json"
-    out = Path(args.output) if args.output else repo_root / ".claude-plugin" / "marketplace.json"
-    config = _load_marketplace_config(config_path)
-    skills_root = Path(args.root)
-    generated = render_marketplace(skills_root, config)
-    if args.check:
-        existing = out.read_text(encoding="utf-8") if out.exists() else ""
-        if existing != generated:
-            print(
-                f"error: {out} is stale or missing — run "
-                f"'python3 scripts/build-marketplace.py' to regenerate.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"ok   {out} is up to date.")
-        return 0
-    out.write_text(generated, encoding="utf-8")
-    print(f"wrote {out}")
-    return 0
-
-
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -589,13 +377,6 @@ def main(argv=None) -> int:
     pi.add_argument("--output", help="output path (default: skills/INDEX.md)")
     pi.add_argument("--check", action="store_true", help="fail if the index is stale")
     pi.set_defaults(func=cmd_index)
-
-    pm = sub.add_parser("marketplace", help="generate or check .claude-plugin/marketplace.json")
-    pm.add_argument("--root", default="skills", help="skills directory (default: skills)")
-    pm.add_argument("--output", help="output path (default: .claude-plugin/marketplace.json)")
-    pm.add_argument("--config", help="config path (default: .claude-plugin/marketplace-config.json)")
-    pm.add_argument("--check", action="store_true", help="fail if the marketplace is stale")
-    pm.set_defaults(func=cmd_marketplace)
 
     args = p.parse_args(argv)
     return args.func(args)

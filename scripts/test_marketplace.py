@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import skills  # noqa: E402
+import marketplace  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -66,8 +66,8 @@ def main() -> int:
         config_path = tmp / "config.json"
         _write_config(config_path)
 
-        config = skills._load_marketplace_config(config_path)
-        rendered = skills.render_marketplace(skills_root, config)
+        config = marketplace.load_config(config_path)
+        rendered = marketplace.render(skills_root, config)
         mp = json.loads(rendered)
 
         # Top-level fields from config.
@@ -127,14 +127,14 @@ def main() -> int:
             check = False
 
         # First, generate the file.
-        rc = skills.cmd_marketplace(Args)
+        rc = marketplace.cmd_marketplace(Args)
         if rc != 0:
             print(f"  FAIL generate returned {rc}")
             failed += 1
 
         # --check against the just-generated file should pass.
         Args.check = True
-        rc = skills.cmd_marketplace(Args)
+        rc = marketplace.cmd_marketplace(Args)
         if rc != 0:
             print(f"  FAIL --check against fresh file returned {rc}")
             failed += 1
@@ -142,14 +142,14 @@ def main() -> int:
         # Corrupt the file — add a trailing newline or extra field.
         corrupted = out_path.read_text(encoding="utf-8") + "\n"
         out_path.write_text(corrupted, encoding="utf-8")
-        rc = skills.cmd_marketplace(Args)
+        rc = marketplace.cmd_marketplace(Args)
         if rc == 0:
             print("  FAIL --check should fail on corrupted marketplace")
             failed += 1
 
         # Missing file.
         out_path.unlink()
-        rc = skills.cmd_marketplace(Args)
+        rc = marketplace.cmd_marketplace(Args)
         if rc == 0:
             print("  FAIL --check should fail when marketplace file is missing")
             failed += 1
@@ -162,9 +162,9 @@ def main() -> int:
         config_path = tmp / "config.json"
         _write_config(config_path)
 
-        config = skills._load_marketplace_config(config_path)
-        first = skills.render_marketplace(skills_root, config)
-        second = skills.render_marketplace(skills_root, config)
+        config = marketplace.load_config(config_path)
+        first = marketplace.render(skills_root, config)
+        second = marketplace.render(skills_root, config)
         if first != second:
             print("  FAIL regeneration is not byte-stable")
             # Show the diff.
@@ -192,8 +192,8 @@ def main() -> int:
             config_path = tmp / "config.json"
             config_path.write_text(json.dumps(test_config), encoding="utf-8")
             try:
-                skills._load_marketplace_config(config_path)
-                print(f"  FAIL _load_marketplace_config should exit on missing '{missing_key}'")
+                marketplace.load_config(config_path)
+                print(f"  FAIL load_config should exit on missing '{missing_key}'")
                 failed += 1
             except SystemExit as exc:
                 if exc.code != 2:
@@ -205,7 +205,7 @@ def main() -> int:
             "name": "n", "owner": {"name": "t"}, "metadata": {},
         }), encoding="utf-8")
         try:
-            skills._load_marketplace_config(config_path)
+            marketplace.load_config(config_path)
             print("  FAIL should exit on missing metadata.description")
             failed += 1
         except SystemExit as exc:
@@ -218,7 +218,7 @@ def main() -> int:
             "name": "n", "owner": {}, "metadata": {"description": "d"},
         }), encoding="utf-8")
         try:
-            skills._load_marketplace_config(config_path)
+            marketplace.load_config(config_path)
             print("  FAIL should exit on missing owner.name")
             failed += 1
         except SystemExit as exc:
@@ -228,7 +228,7 @@ def main() -> int:
 
         # Missing config file.
         try:
-            skills._load_marketplace_config(tmp / "nonexistent.json")
+            marketplace.load_config(tmp / "nonexistent.json")
             print("  FAIL should exit on missing config file")
             failed += 1
         except SystemExit as exc:
@@ -244,8 +244,8 @@ def main() -> int:
         config_path = tmp / "config.json"
         _write_config(config_path)
 
-        config = skills._load_marketplace_config(config_path)
-        rendered = skills.render_marketplace(skills_root, config)
+        config = marketplace.load_config(config_path)
+        rendered = marketplace.render(skills_root, config)
         mp = json.loads(rendered)
         if mp["plugins"] != []:
             print(f"  FAIL expected empty plugins list, got {mp['plugins']!r}")
@@ -261,7 +261,7 @@ def main() -> int:
     # PR that deletes BOTH the drift step AND this test's step at once would
     # stop the guard running at all — that same-PR deletion is out of reach for
     # a same-job self-test and is left to human review (and the fact that the
-    # skills.py contexts<->jobs drift guard still requires the `validate-skills`
+    # branch_protection.py contexts<->jobs drift guard still requires the `validate-skills`
     # job to exist). Mirrors that drift guard, which parses structurally; here
     # we assert active (non-commented) lines so a commented-out step is caught
     # too. The matches are intentionally literal: a script rename or step
@@ -290,7 +290,7 @@ def main() -> int:
                   "so this guard would not execute in CI")
             failed += 1
         # The job name must equal the required status-check context name
-        # (skills.py drift guard asserts the same for every required context).
+        # (the branch_protection.py drift guard asserts the same for every required context).
         if not any(ln.strip() == "validate-skills:" for ln in active):
             print("  FAIL validate-skills.yml job must be named 'validate-skills' "
                   "to match the required status-check context (ADR-0003)")
