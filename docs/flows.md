@@ -12,13 +12,16 @@ This repo has three skills, and they layer:
 - **[`tickets-to-paseo`](../skills/tickets-to-paseo/SKILL.md)** — the *how*.
   Adapter that maps the core's plan onto the Paseo 0.1.110 surface (`paseo run`,
   chat rooms, supervisor).
-- **[`loop-engineering`](../skills/loop-engineering/SKILL.md)** — the *driver*.
-  Scripts the per-ticket lifecycle deterministically (routing spine + close-out
-  loop) and invokes external doing-skills (`/triage`, `/implement`,
-  `/code-review`, …) as leaves.
+- **[`loop-engineering`](../skills/loop-engineering/SKILL.md)** — the
+  *discipline*. The stack-agnostic system that drives the per-ticket lifecycle
+  deterministically (routing spine + close-out loop) and invokes external
+  doing-skills (`/triage`, `/implement`, `/code-review`, …) as leaves.
+  Runtime-neutral; the consumer instantiates it in their harness.
 
 External doing-skills are **not** in this repo. The loop invokes them; it never
-carries them ([ADR-0001](./adr/0001-fork-with-selective-sync.md)).
+carries them ([ADR-0001](./adr/0001-fork-with-selective-sync.md)). The in-repo
+Python reference driver is retired ([ADR-0011](./adr/0011-agent-skill-product-reframe.md));
+the flows below describe the discipline, not runnable commands.
 
 ## Start here: pick your starting point
 
@@ -46,7 +49,7 @@ ready-for-agent + task
   ▼  loop-engineering (close-out half)
 independent /code-review (secondary model, separate worktree, diff + spec only)
   │
-  ▼  scripts/verdict.py — derived verdict (computed, never declared)
+  ▼  the verdict function — derived verdict (computed, never declared)
 pass?  ──yes──▶  loop enables auto-merge  →  GitHub merges (CI green)  →  Fixes #N closes the issue
   │
   no
@@ -61,19 +64,11 @@ findings handed to the SAME implementer verbatim  →  push  →  re-review
 | Route | `loop-engineering` | a dispatch decision (readiness gate + type) | the implement turn |
 | Implement | `/implement` (external) | a PR with `Fixes #N` | the close-out loop |
 | Review | `/code-review` (external, independent) | sha-tagged findings | the derived verdict |
-| Verdict | `scripts/verdict.py` | pass / fail | merge, or the fix loop |
+| Verdict | the verdict function (`derive_verdict`) | pass / fail | merge, or the fix loop |
 | Merge + close | `loop-engineering` | merged PR, closed issue | — |
 
-Commands (CI-safe — no agents, no network):
-
-```bash
-python3 scripts/loop.py 28 --dry-run                                       # plan the implement turn
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,pass      # simulate the close-out
-python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail      # → STUCK_REVIEW
-```
-
-See [`docs/agents/closeout.md`](./agents/closeout.md) for the close-out shape,
-invariants, and demo procedure.
+See [`loop-engineering`](../skills/loop-engineering/SKILL.md) for the close-out
+loop, the `STUCK_REVIEW` cap, and the dual-close invariants.
 
 > **Note:** The core (`ticket-workflow-core`) and adapter (`tickets-to-paseo`) skills
 > power Flow E's multi-ticket orchestration; they're not visible in single-ticket
@@ -141,8 +136,9 @@ dependents unblock on VERIFIED work, not agent-finished
 
 A dependent's loop does not start until its blocker is **merged-and-gated** (PR
 merged AND `validate-skills` green). A stuck blocker freezes only its transitive
-dependents — independent tickets proceed. See
-[ADR-0006](./adr/0006-supervisor-and-merged-and-gated-completion.md).
+dependents — independent tickets proceed. The merged-and-gated completion
+semantics live in
+[`ticket-workflow-core` (SUPERVISE)](../skills/ticket-workflow-core/SKILL.md).
 
 ## The readiness gate
 

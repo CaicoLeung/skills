@@ -2,8 +2,7 @@
 """Unit tests for the skill frontmatter validator's interview-flag rule.
 
 Zero-dependency: runnable directly as ``python3 scripts/test_skills.py``.
-Exits non-zero on any failure. Mirrors the table-driven, public-surface-only
-style of ``test_routing.py`` / ``test_reviewer.py``.
+Exits non-zero on any failure. Table-driven, public-surface-only style.
 
 Scope (ADR-0009): the one new test seam — the validator's external accept/reject
 behavior for the optional ``asks-user-questions`` boolean field, plus the

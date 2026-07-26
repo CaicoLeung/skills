@@ -1,7 +1,7 @@
 ---
 name: ticket-workflow-core
 description: "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision."
-version: 0.6.0
+version: 0.7.0
 requires:
   - project
   - tickets
@@ -111,7 +111,7 @@ REASONING_DEPTH mapping:
 
 ### GATE
 
-Enforce close-out gates before task completion (e.g., `/code-review` must pass). Derived verdict protocol (ADR-0007): verdict is computed from severity-tagged findings, never self-declared.
+Enforce close-out gates before task completion (e.g., `/code-review` must pass). Derived verdict protocol: verdict is computed from severity-tagged findings, never self-declared.
 
 **Abstract shape:**
 ```
@@ -132,23 +132,23 @@ GATE task:
       policy: "auto" | "wait-for-human"
 ```
 
-**Derived verdict protocol (ADR-0007):** Reviewer emits **only structured findings** across the two `/code-review` axes (Standards, Spec). Format: `[file:line]: SEVERITY: summary` where `SEVERITY ∈ {CRITICAL, HIGH, MEDIUM, LOW}`. Explicit OK: `file: OK`. No `VERDICT pass|fail` line — the verdict is computed by a pure function (`derive_verdict(findings_text, changed_files)`).
+**Derived verdict protocol:** Reviewer emits **only structured findings** across the two `/code-review` axes (Standards, Spec). Format: `[file:line]: SEVERITY: summary` where `SEVERITY ∈ {CRITICAL, HIGH, MEDIUM, LOW}`. Explicit OK: `file: OK`. No `VERDICT pass|fail` line — the verdict is computed by a pure function the consumer implements (`derive_verdict(findings_text, changed_files)`).
 
 **Verdict rule:** `pass = (no CRITICAL and no HIGH) AND (every changed file has a finding or explicit OK)`. CRITICAL/HIGH findings block. MEDIUM/LOW are non-blocking warnings. Coverage floor: a changed file with neither finding nor OK is a gap that fails.
 
-**Reviewer independence (ADR-0007 §2) — concretized:** The reviewer is the findings producer, separated from the implementer on five axes, each enforced structurally rather than by instruction:
+**Reviewer independence — concretized:** The reviewer is the findings producer, separated from the implementer on five axes, each enforced structurally rather than by instruction:
 
 | axis | guarantee | where it lives |
 | --- | --- | --- |
-| invoker | the loop driver invokes the review, never the implementer | loop driver (ADR-0008) |
-| prompt | a **fixed, system-authored** template the implementer never sees or edits | `skills/ticket-workflow-core/review-prompt.md` |
-| model | the **secondary model** on a **different provider** than the implementer | adapter (e.g. `paseo run --provider <secondary>`) |
-| workspace | a **separate isolated worktree** | adapter (`paseo worktree`) |
-| input | **diff + ticket spec only** — never the author's commit messages or PR prose | `scripts/reviewer.py build_review_prompt` (no author-prose parameter) |
+| invoker | the loop driver invokes the review, never the implementer | loop driver |
+| prompt | a **fixed, system-authored** template the implementer never sees or edits | [`review-prompt.md`](./review-prompt.md) |
+| model | the **secondary model** on a **different provider** than the implementer | adapter |
+| workspace | a **separate isolated worktree** | adapter |
+| input | **diff + ticket spec only** — never the author's commit messages or PR prose | reviewer core (no author-prose parameter) |
 
-The reviewer emits **only** findings (no `VERDICT` line). `scripts/reviewer.py` is the runtime-neutral reviewer core: it renders the fixed template from diff + spec only, strips any self-declared verdict line (defense in depth), parses findings via `verdict.py` (single source of truth for the format), and formats the sha-tagged findings comment the reviewer's GitHub-App identity posts. The loop posts that comment; the `review-verdict` CI (T3) reads it and runs `verdict.py`.
+The reviewer emits **only** findings (no `VERDICT` line). A **reviewer core** — the consumer's implementation — renders the fixed template from diff + spec only, strips any self-declared verdict line (defense in depth), and formats the sha-tagged findings comment the reviewer's dedicated GitHub-App identity posts. The verdict is derived by the pure function above; reviewer independence ensures no agent can forge its own verdict.
 
-**Runtime mapping:** Adapters invoke the secondary-model reviewer with the fixed prompt template (`review-prompt.md`) via the reviewer core (`reviewer.py`), in a separate worktree, on a different provider. Findings are transported as a sha-tagged PR comment from the reviewer's dedicated GitHub-App identity and evaluated by `verdict.py`. The CI check enforces the computed verdict. Reviewer independence ensures no agent can forge its own verdict (ADR-0007).
+**Runtime mapping:** Adapters invoke the secondary-model reviewer with the fixed prompt template ([`review-prompt.md`](./review-prompt.md)) in a separate worktree, on a different provider. Findings are transported as a sha-tagged PR comment from the reviewer's dedicated identity; the host's required status check enforces the computed verdict.
 
 ---
 
@@ -285,6 +285,7 @@ This core is intentionally zero/low-dependency and provider-neutral. No runtime-
 
 ## Version Changes
 
+0.7.0: Reframed as a runtime-neutral knowledge artifact ([ADR-0011](../../docs/adr/0011-agent-skill-product-reframe.md)). The reviewer core and verdict function are now the consumer's implementation of the GATE contract, not an in-repo `scripts/` module — the Python reference driver has been retired. The five reviewer-independence axes are retained; the abstract primitive contract is unchanged.
 0.6.0: GATE reviewer-independence contract concretized (ADR-0007 §2) — five axes (invoker, prompt, model, workspace, input), each enforced structurally. Added the fixed, system-authored review prompt (`skills/ticket-workflow-core/review-prompt.md`) and the runtime-neutral reviewer core (`scripts/reviewer.py`): builds the prompt from diff + spec only, strips self-declared verdicts, and formats sha-tagged findings comments. The reviewer emits findings only; the verdict stays computed.
 0.5.0: GATE verdict protocol changed from self-declared to derived (ADR-0007). Removed `VERDICT pass|fail` schema. Verdict is computed by pure function from severity-tagged findings: `pass = (no CRITICAL/HIGH) AND (every changed file has coverage)`. MEDIUM/LOW are non-blocking warnings.
 0.4.0: DEPENDS_ON clarified — completion semantics now explicitly distinguish merged-and-gated (default) from agent-finished. Two-state completion documented: supervisor observes merged-and-gated, posts verified signal; dependents unblock on verified work, not agent-finished. Resolves gap #2.

@@ -1,8 +1,9 @@
 # ADR-0010: GitHub read gateway — reads injected, writes stay command-list data
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-07-25
 - **Supersedes:** —
+- **Superseded by:** [ADR-0011](./0011-agent-skill-product-reframe.md) (2026-07-26) — in-repo implementation decision; reference implementation retired, discipline survives in the skills.
 - **Amends:** —
 - **Related:** [ADR-0004](./0004-runtime-neutral-core-plus-adapter.md) (the gateway is a transport adapter; the rule stays runtime-neutral), [ADR-0008](./0008-script-driven-loop-driver-and-type-aware-routing.md) (the `runner` injection this twins), [ADR-0007](./0007-derived-verdict-and-reviewer-independence.md) (the REVIEW enrichment the gateway makes testable)
 

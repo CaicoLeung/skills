@@ -1,7 +1,7 @@
 ---
 name: tickets-to-paseo
 description: "Paseo adapter for ticket-workflow-core — maps abstract primitives to Paseo 0.1.110 surface (chat rooms, schedules, prompt contracts, supervisor)."
-version: 0.6.0
+version: 0.7.0
 requires:
   - project
   - tickets
@@ -14,6 +14,14 @@ produces:
 # Paseo Adapter for Ticket Workflow
 
 **Adapter for `ticket-workflow-core`.** Consumes the core's runtime-neutral workflow plan and maps abstract primitives to the Paseo 0.1.110 surface.
+
+> **Scope.** This is a knowledge artifact: how a consumer running Paseo 0.1.110
+> would map the core primitives to that surface. The in-repo Python reference
+> implementation (`scripts/`) has been retired (see
+> [ADR-0011](../../docs/adr/0011-agent-skill-product-reframe.md)); the reviewer
+> core and verdict function referenced below are the consumer's own
+> implementations of the contract in
+> [`ticket-workflow-core`](../ticket-workflow-core/SKILL.md).
 
 ## Runtime Mapping: Abstract → Paseo 0.1.110
 
@@ -108,14 +116,14 @@ If provider has **no** thinking options (empty array), omit `--thinking` flag an
 
 ### GATE → Independent Reviewer (derived verdict) + Branch Protection
 
-Core's `GATE` primitive maps to **two layers** (Paseo 0.1.110 has no daemon gate). Post-ADR-0007 the trigger is no longer a self-declared `VERDICT` the implementer appends — it is an **independent reviewer** the loop invokes.
+Core's `GATE` primitive maps to **two layers** (Paseo 0.1.110 has no daemon gate). The trigger is not a self-declared `VERDICT` the implementer appends — it is an **independent reviewer** the loop invokes.
 
-**1. Reviewer layer (independent, derived verdict):** The **loop driver** — not the implementer — invokes the secondary-model reviewer. Five independence axes (ADR-0007 §2), mapped to Paseo 0.1.110:
+**1. Reviewer layer (independent, derived verdict):** The **loop driver** — not the implementer — invokes the secondary-model reviewer. The reviewer core (the consumer's implementation of the [`ticket-workflow-core`](../ticket-workflow-core/SKILL.md#gate) contract) renders the fixed, system-authored prompt from diff + spec only and formats the sha-tagged findings. Five independence axes, mapped to Paseo 0.1.110:
 
 ```bash
-# (a) Render the FIXED, system-authored prompt from diff + spec ONLY.
-#     scripts/reviewer.py has NO parameter for commit messages or PR prose.
-prompt=$(python3 scripts/reviewer.py build-prompt \
+# (a) The reviewer core renders the FIXED, system-authored prompt from diff +
+#     spec ONLY (no commit messages, no PR prose). review-prompt.md is the template.
+prompt=$(reviewer-core build-prompt \
   --diff <(git diff "$base..$head") \
   --spec <(extract-ticket-spec "$issue") \
   --sha "$head" --changed-files <(git diff --name-only "$base..$head"))
@@ -125,44 +133,39 @@ paseo worktree create "review-$pr" --base "$head"
 paseo run --provider "$secondary_provider" --model "$secondary_model" \
   --worktree "review-$pr" --base "$head" --detach "$prompt" > reviewer.out
 
-# (c) Strip any verdict, check coverage, format the sha-tagged findings comment.
-python3 scripts/reviewer.py format-findings \
+# (c) The reviewer core strips any verdict, checks coverage, formats the
+#     sha-tagged findings comment.
+reviewer-core format-findings \
   --findings reviewer.out --sha "$head" \
-  --changed-files <(git diff --name-only "$base..$head") > findings.md
+  --changed-files <(git diff --name-only "$base..$head")) > findings.md
 
 # (d) Post findings from the reviewer's DEDICATED GitHub-App identity (the
-#     implementer lacks this token). The sha marker lets review-verdict (T3)
-#     select the latest current review.
+#     implementer lacks this token). The sha marker selects the latest review.
 GH_TOKEN="$REVIEWER_APP_TOKEN" gh pr comment "$pr" --body-file findings.md
 ```
 
-The reviewer emits **only** severity-tagged findings across the two axes (Standards, Spec) — never a `VERDICT` line. The verdict is *derived* from those findings by `scripts/verdict.py`. The same implementer then fixes against the findings handed to it verbatim; a finding is "resolved" only when it disappears from the next independent review (T5b).
+The reviewer emits **only** severity-tagged findings across the two axes (Standards, Spec) — never a `VERDICT` line. The verdict is *derived* from those findings by a pure function (`derive_verdict`). The same implementer then fixes against the findings handed to it verbatim; a finding is "resolved" only when it disappears from the next independent review.
 
-**2. Enforcement layer (branch protection):** GitHub branch protection requires CI status check:
+**2. Enforcement layer (branch protection):** GitHub branch protection requires a CI status check (e.g., `validate-skills`):
 
 ```bash
-gh api -X PUT repos/CaicoLeung/skills/branches/main/protection \
+gh api -X PUT repos/OWNER/REPO/branches/main/protection \
   --input - <<'EOF'
 {
-  "required_status_checks": {
-    "strict": true,
-    "contexts": ["validate-skills"]
-  },
+  "required_status_checks": { "strict": true, "contexts": ["validate-skills"] },
   "enforce_admins": true
 }
 EOF
 ```
 
-A PR cannot merge unless `validate-skills` (which runs `scripts/validate-skills.py`) passes.
-
-**Reality:** Enforcement lives at GitHub branch protection. Today it requires `validate-skills`; the `review-verdict` context (which reads the reviewer App's sha-tagged findings and runs `verdict.py`) is added by T3, after which branch protection requires both. Paseo 0.1.110 has no daemon gate. See [ADR-0003](../../docs/adr/0003-branch-protection-quality-gate.md) and [ADR-0007](../../docs/adr/0007-derived-verdict-and-reviewer-independence.md).
+A PR cannot merge unless the required check passes. The adapter maps the core's `mergePolicy` to the host's merge mechanism; enforcement lives at branch protection, not in the agent. Paseo 0.1.110 has no daemon gate.
 
 **3. Merge step (merge policy):** Once the close-out gate holds (derived verdict passed + CI green), the **loop driver** — never the implementer — enables GitHub auto-merge, per `mergePolicy` from the core plan:
 
 - **`"auto"`** → the **loop** enables GitHub auto-merge on the PR: `gh pr merge --auto --squash --delete-branch`. GitHub performs the merge the instant branch-protection rules pass.
 - **`"wait-for-human"`** (default) → the PR is opened and auto-merge is **not** enabled, leaving it for a human to review and merge.
 
-The implementer never performs the merge itself — merge authority is branch protection + auto-merge, flipped on by the loop only after the derived verdict passes (ADR-0007). Squash + delete-branch is the fixed adapter default (not a launch question). See [ADR-0005](../../docs/adr/0005-auto-merge-via-branch-protection.md).
+The implementer never performs the merge itself — merge authority is branch protection + auto-merge, flipped on by the loop only after the derived verdict passes. Squash + delete-branch is the fixed adapter default (not a launch question).
 
 ---
 
@@ -220,7 +223,7 @@ Core's `SUPERVISE` primitive maps to a supervisor agent that polls PR/CI state v
 
 **Subgraph isolation mapping:** Paseo 0.1.110 has no daemon-level dependency edges. The supervisor computes the blocked subgraph from the dependency graph passed at workflow generation and posts a scoped escalation to the chat room. Dependent tasks filter for their blocker in the `blocked` list; independent tasks proceed without waiting.
 
-**Gap documentation:** Paseo 0.1.110 has no daemon supervisor. Adapter implements supervisor as a long-running agent that polls GitHub API. This is correct pattern — polling *gate state* ≠ polling *agent internals*. See ADR-0006.
+**Gap documentation:** Paseo 0.1.110 has no daemon supervisor. Adapter implements supervisor as a long-running agent that polls GitHub API. This is correct pattern — polling *gate state* ≠ polling *agent internals*. The merged-and-gated completion semantics live in [`ticket-workflow-core`](../ticket-workflow-core/SKILL.md#supervise).
 
 ---
 
@@ -317,13 +320,14 @@ Never restart daemon without explicit user approval — it kills all running age
 |----------------|----------------------|------------------|
 | `DEPENDS_ON` with `notifyOnFinish` edge | **Does not exist** | Chat room handoff (`paseo chat post / wait`) |
 | `FAILOVER` with live model-switch | **Does not exist** (`update_agent` only metadata) | New agents switch; in-flight agents stay on original model |
-| `GATE` as daemon gate | **Does not exist** | Independent reviewer (loop-invoked, secondary model, separate worktree, App identity) + `review-verdict` CI (T3) + GitHub branch protection |
+| `GATE` as daemon gate | **Does not exist** | Independent reviewer (loop-invoked, secondary model, separate worktree, App identity) + GitHub branch protection required check |
 | `SUPERVISE` as daemon supervisor | **Does not exist** | Long-running supervisor agent polls GitHub API, posts to chat room |
 
 Adding a second runtime (e.g., OpenAI, non-Paseo) is a **new adapter file** that consumes the same core workflow plan and maps primitives to its surface. No core changes required.
 
 ## Version Changes
 
+0.7.0: Reframed as a runtime-neutral knowledge artifact ([ADR-0011](../../docs/adr/0011-agent-skill-product-reframe.md)). Removed references to the in-repo `scripts/reviewer.py` / `verdict.py` / `review-verdict` CI (retired); the reviewer core and `derive_verdict` are now the consumer's implementation of the [`ticket-workflow-core`](../ticket-workflow-core/SKILL.md) contract. Branch-protection enforcement kept (host-required `validate-skills`); the dropped `review-verdict` context is no longer referenced. Superseded inline ADR pointers (0003/0005/0006/0007) replaced with cross-links to the core skill.
 0.5.0: DEPENDS_ON chat-room handoff clarified — supervisor posts completion signal only after merged-and-gated, not agent-finished. Two-state completion documented: agent-finished (work submitted) vs merged-and-gated (work verified).
 0.4.0: Added SUPERVISE primitive — supervisor agent polls GitHub API, posts merged-and-gated completion, escalates stuck gates within bounded window. Honest reconciliation: polling gate state ≠ polling agents.
 
@@ -339,7 +343,7 @@ Generated workflow must:
 
 ## Version Change
 
-0.6.0: GATE mapping changed from self-declared `VERDICT pass|fail` prompt contract to an **independent reviewer** the loop invokes (ADR-0007): loop-invoked, fixed system-authored prompt (`review-prompt.md`) via `scripts/reviewer.py`, secondary model on a different provider, separate worktree, diff+spec input only, findings posted from a dedicated GitHub-App identity. Reviewer emits findings only; verdict is derived. Merge authority moved to the loop (not the implementer).
+0.6.0: GATE mapping changed from self-declared `VERDICT pass|fail` prompt contract to an **independent reviewer** the loop invokes (ADR-0007): loop-invoked, fixed system-authored prompt (`review-prompt.md`) via `scripts/reviewer.py`, secondary model on a different provider, separate worktree, diff+spec input only, findings posted from a dedicated GitHub-App identity. Reviewer emits findings only; verdict is derived. Merge authority moved to the loop (not the implementer). *(Historical — referenced the now-retired driver; see 0.7.0.)*
 0.5.1: Fixed DEPENDS_ON wait — `paseo chat wait` (0.1.110) has no `--filter`; dependents now filter client-side (`chat read` + `grep`) anchored on `task_<id> pr=`, so `task_1` no longer matches `task_10` and the wait resolves only on the supervisor's merged-and-gated signal, not agent-finished.
 0.5.0: Added subgraph scoping to SUPERVISE — when a blocker is stuck, only its transitive dependents are blocked; independent tasks proceed. Supervisor computes blocked subgraph from dependency graph and posts scoped escalation.
 0.4.0: Added SUPERVISE primitive — supervisor agent polls GitHub API, posts merged-and-gated completion, escalates stuck gates within bounded window. Honest reconciliation: polling gate state ≠ polling agents.

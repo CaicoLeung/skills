@@ -1,8 +1,9 @@
 # ADR-0007: Derived verdict and reviewer independence
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-07-24
 - **Supersedes:** —
+- **Superseded by:** [ADR-0011](./0011-agent-skill-product-reframe.md) (2026-07-26) — in-repo implementation decision; reference implementation retired, discipline survives in the skills.
 - **Related:** [ADR-0003](./0003-branch-protection-quality-gate.md), [ADR-0004](./0004-runtime-neutral-core-plus-adapter.md), [ADR-0005](./0005-auto-merge-via-branch-protection.md), [ADR-0006](./0006-supervisor-and-merged-and-gated-completion.md)
 
 ## Context

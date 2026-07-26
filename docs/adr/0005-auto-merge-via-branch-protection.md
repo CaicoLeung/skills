@@ -1,8 +1,9 @@
 # ADR-0005: The close-out merge option is a per-PR agent toggle; merge authority is branch protection + auto-merge
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-07-24
 - **Supersedes:** —
+- **Superseded by:** [ADR-0011](./0011-agent-skill-product-reframe.md) (2026-07-26) — in-repo implementation decision; reference implementation retired, discipline survives in the skills.
 
 ## Context
 
