@@ -1,8 +1,9 @@
 # ADR-0008: Script-driven loop driver and type-aware routing
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-07-24
 - **Supersedes:** —
+- **Superseded by:** [ADR-0011](./0011-agent-skill-product-reframe.md) (2026-07-26) — in-repo implementation decision; reference implementation retired, discipline survives in the skills.
 - **Related:** [ADR-0001](./0001-fork-with-selective-sync.md), [ADR-0004](./0004-runtime-neutral-core-plus-adapter.md), [ADR-0006](./0006-supervisor-and-merged-and-gated-completion.md), [ADR-0007](./0007-derived-verdict-and-reviewer-independence.md)
 
 ## Context

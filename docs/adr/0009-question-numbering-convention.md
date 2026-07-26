@@ -6,6 +6,13 @@
 - **Amends:** [ADR-0002](./0002-skill-frontmatter-contract.md) (adds one optional frontmatter field)
 - **Related:** [ADR-0008](./0008-script-driven-loop-driver-and-type-aware-routing.md) (the dispatch hook lives in the loop driver)
 
+> **Realization note (2026-07-26).** This convention is unchanged and is still
+> enforced by `scripts/validate-skills.py` + `scripts/test_skills.py`. The
+> *loop-driver dispatch hook* (`scripts/loop.py`) and the `test_routing.py` /
+> `test_reviewer.py` companions it cited are retired — see
+> [ADR-0011](./0011-agent-skill-product-reframe.md). The convention applies to
+> any interviewing skill the consumer dispatches, not only the retired loop.
+
 ## Context
 
 When a skill interviews the user — `grilling`, refactor planning, brainstorming,

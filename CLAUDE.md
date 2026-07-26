@@ -14,7 +14,7 @@ Triage uses the five default labels (`needs-triage`, `needs-info`, `ready-for-ag
 
 ### Ticket types
 
-Routing dispatches on ticket type (`research` / `prototype` / `grilling` / `task`) after the readiness gate — orthogonal to triage state. Pure dispatcher: `python3 scripts/routing.py`; tests: `python3 scripts/test_routing.py`. See `docs/agents/ticket-types.md`.
+Routing dispatches on ticket type (`research` / `prototype` / `grilling` / `task`) after the readiness gate — orthogonal to triage state. See `docs/agents/ticket-types.md`.
 
 ### Domain docs
 

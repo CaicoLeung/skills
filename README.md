@@ -4,7 +4,13 @@ A fork of [mattpocock/skills](https://github.com/mattpocock/skills) organized
 around **Loop Engineering** — designing the *system* that drives an agent
 through a goal-bounded, verified cycle (implement, review, fix, merge, close),
 rather than prompting it turn-by-turn. Routines are mechanical operations
-encoded as scripted steps with a verification gate at each stage. See
+encoded as deterministic steps with a verification gate at each stage.
+
+This repo publishes Loop Engineering as **installable Agent Skills** —
+stack-agnostic discipline the consumer instantiates in their own harness. The
+skills teach the discipline; an in-repo Python/Paseo reference implementation
+previously lived under `scripts/` and has been retired (see
+[ADR-0011](./docs/adr/0011-agent-skill-product-reframe.md)). See
 [`CONTEXT.md`](./CONTEXT.md) for the vocabulary and
 [ADR-0001](./docs/adr/0001-fork-with-selective-sync.md) for the fork's
 selective-sync policy.
@@ -15,9 +21,16 @@ selective-sync policy.
 | --- | --- |
 | [`ticket-workflow-core`](./skills/ticket-workflow-core/SKILL.md) | Runtime-neutral core — turns ticket data into a workflow plan |
 | [`tickets-to-paseo`](./skills/tickets-to-paseo/SKILL.md) | Paseo adapter — maps the plan onto the Paseo 0.1.110 surface |
-| [`loop-engineering`](./skills/loop-engineering/SKILL.md) | Deterministic loop driver — scripts routing + close-out |
+| [`loop-engineering`](./skills/loop-engineering/SKILL.md) | The discipline — two-axis routing + the close-out loop (runtime-neutral) |
 
 Full list with versions and I/O: [`skills/INDEX.md`](./skills/INDEX.md).
+
+## Install
+
+These are Claude-Code-style skills. Install the fork with a compatible skill
+installer (e.g. the upstream `npx skills add`), which copies the committed
+`skills/<name>/` tree verbatim — there is no build step, so each skill is
+self-contained in the committed source.
 
 ## How do I use these skills?
 
@@ -36,7 +49,7 @@ independent review → derived verdict → merge → close.
 - [Architecture decisions](./docs/adr/) — ADRs
 - [Skill contract](./docs/agents/skills.md) — frontmatter, validation, indexing
 - [Ticket types](./docs/agents/ticket-types.md) · [triage labels](./docs/agents/triage-labels.md)
-- [Close-out loop](./docs/agents/closeout.md) — review → verdict → fix → merge → close
+- [Close-out loop](./skills/loop-engineering/SKILL.md) — review → verdict → fix → merge → close (in `loop-engineering`)
 
 ## Validate
 

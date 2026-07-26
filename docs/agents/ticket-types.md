@@ -3,7 +3,9 @@
 The loop routes a claimed ticket on **two orthogonal label axes**: a readiness
 *state* (the triage roles in [triage-labels](./triage-labels.md)) and a ticket
 *type* — the kind of work. This file maps the type vocabulary to the actual
-label strings used in this repo's issue tracker. See [ADR-0008](../adr/0008-script-driven-loop-driver-and-type-aware-routing.md).
+label strings used in this repo's issue tracker. See
+[`loop-engineering`](../../skills/loop-engineering/SKILL.md) for the two-axis
+routing that consumes these types.
 
 The loop gates on readiness **first** (a ticket that is not `ready-for-agent`
 never reaches type dispatch), then dispatches on type. Type is set at ticket
@@ -26,9 +28,10 @@ carries one of each, and neither implies the other:
 - A `ready-for-agent` ticket can be any of `research`, `prototype`, `grilling`,
   or `task`.
 
-The loop's [dispatcher](../../scripts/routing.py) encodes this as a pure
-two-axis function: `route(labels)` returns the action (invoke `/triage`, pause
-for info, stop, close/skip, or dispatch by type). Notable rules:
+The loop's dispatcher encodes this as a pure two-axis function: `route(labels)`
+returns the action (invoke `/triage`, pause for info, stop, close/skip, or
+dispatch by type). The consumer implements it; see
+[`loop-engineering`](../../skills/loop-engineering/SKILL.md). Notable rules:
 
 - **Unlabeled** (no triage state) → `/triage`.
 - **`needs-info`** → pause for the reporter.
