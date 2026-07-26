@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _test_fakes import FakeGitHubReader  # noqa: E402
-from github import GitHubReader  # noqa: E402
+from github import GitHubReader, _normalize_check_run  # noqa: E402
 import loop  # noqa: E402
 import supervise  # noqa: E402
 
@@ -659,6 +659,86 @@ def main() -> int:
         failed,
     )
 
+    # --- github._normalize_check_run: Actions check-runs → unified state -----
+    # The supervisor's absence-of-signal detector depends on Actions checks
+    # (review-verdict / validate-skills) being "seen". They report as
+    # check-runs, NOT legacy status contexts, so the gateway must normalize
+    # them into the {context, state} shape loop's gate-build reads.
+    print("check-run normalization (Actions → unified state):")
+    _check(
+        _normalize_check_run(
+            {"name": "validate-skills", "status": "completed", "conclusion": "success"}
+        ) == {"context": "validate-skills", "state": "success"},
+        "completed/success check-run normalizes to state=success (gate passes)",
+        failed,
+    )
+    _check(
+        _normalize_check_run(
+            {"name": "review-verdict", "status": "completed", "conclusion": "failure"}
+        ) == {"context": "review-verdict", "state": "failure"},
+        "completed/failure check-run normalizes to state=failure (check_failing)",
+        failed,
+    )
+    _check(
+        _normalize_check_run(
+            {"name": "ci", "status": "in_progress", "conclusion": None}
+        ) == {"context": "ci", "state": "pending"},
+        "in_progress check-run normalizes to state=pending (gate converging)",
+        failed,
+    )
+    _check(
+        _normalize_check_run(
+            {"name": "ci", "status": "completed", "conclusion": "stale"}
+        ) == {"context": "ci", "state": "error"},
+        "completed/stale check-run normalizes to state=error",
+        failed,
+    )
+    stale_neutral = _normalize_check_run(
+        {"name": "ci", "status": "completed", "conclusion": "neutral"}
+    )
+    _check(
+        stale_neutral == {"context": "ci", "state": ""},
+        "neutral check-run → state='' (seen but NOT success; WAIT, never pass)",
+        failed,
+    )
+    _check(
+        _normalize_check_run({"name": "ci", "status": "queued"})["state"] == "pending",
+        "queued check-run normalizes to state=pending",
+        failed,
+    )
+    _check(
+        _normalize_check_run({}) == {"context": "", "state": ""},
+        "empty check-run payload does not crash (defensive)",
+        failed,
+    )
+
+    # End-to-end contract: a gate observation over a fake reader whose statuses
+    # carry the unified shape (the shape GhCliReader.commit_status_contexts now
+    # emits for Actions checks) yields check_seen=True. This pins the contract
+    # between the gateway's normalized output and loop's gate-build.
+    sha_actions = "feedface"
+    fake_actions = FakeGitHubReader()
+    fake_actions.merge_states[99] = {
+        "state": "OPEN", "mergeStateStatus": "CLEAN", "headRefOid": sha_actions,
+    }
+    fake_actions.statuses[sha_actions] = [
+        _normalize_check_run(
+            {"name": "validate-skills", "status": "completed", "conclusion": "success"}
+        )
+    ]
+    rep_act = loop.run_supervise_round(
+        11, 99, "task_11", cfg_sup, dry_run=True, gh=fake_actions,
+    )
+    _check(
+        rep_act["gate_state"]["check_seen"] is True,
+        "Actions check-run (unified shape) → check_seen=True (no false absence)",
+        failed,
+    )
+    _check(
+        rep_act["gate_state"]["check_state"] == "success",
+        "Actions check-run success → check_state=success",
+        failed,
+    )
     if failed:
         print(f"\n{len(failed)} supervisor test(s) failed.", file=sys.stderr)
         return 1

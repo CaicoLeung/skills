@@ -86,6 +86,51 @@ def _run_gh(argv: Sequence[str]) -> str:
             f"{rendered} failed: {(exc.stderr or '').strip()}"
         ) from exc
     return result.stdout
+def _normalize_check_run(run: dict[str, Any]) -> dict[str, str]:
+    """Normalize a GitHub **check-run** into the supervisor's status shape.
+
+    GitHub reports Actions results as *check-runs*
+    (``/commits/{sha}/check-runs``), which the legacy
+    ``/commits/{sha}/status`` endpoint does NOT list. Branch protection's
+    ``required_status_checks.contexts`` rule unifies the two surfaces by name,
+    so the supervisor must too — otherwise an Actions-only repo (this one)
+    reads every required check as absent and falsely escalates after the
+    absence-of-signal deadline.
+
+    Maps a check-run's ``(status, conclusion)`` to the single ``state`` value
+    the supervisor already speaks (and that ``loop``'s gate-build reads off a
+    status-context entry)::
+
+        status      = queued | in_progress              -> "pending"
+        conclusion  = success                           -> "success"
+        conclusion  = failure | timed_out | cancelled
+                     | action_required                  -> "failure"
+        conclusion  = stale                             -> "error"
+        conclusion  = neutral | skipped | "" | unknown  -> ""   (ran, no pass/fail)
+
+    ``neutral`` / ``skipped`` map to ``""`` (not success, not failure): a
+    seen-but-neutral check is WAIT, never a pass. Pure function — no network,
+    unit-tested directly so the Actions/legacy unification is provable without
+    a live ``gh`` call.
+    """
+    name = run.get("name") or ""
+    status = (run.get("status") or "").lower()
+    conclusion = (run.get("conclusion") or "").lower()
+
+    if status in ("queued", "in_progress"):
+        state = "pending"
+    elif status == "completed":
+        if conclusion == "success":
+            state = "success"
+        elif conclusion in ("failure", "timed_out", "cancelled", "action_required"):
+            state = "failure"
+        elif conclusion == "stale":
+            state = "error"
+        else:  # neutral, skipped, "", or anything unrecognized
+            state = ""
+    else:
+        state = ""
+    return {"context": name, "state": state}
 
 
 class GhCliReader:
@@ -171,21 +216,52 @@ class GhCliReader:
         }
 
     def commit_status_contexts(self, repo: str, sha: str) -> list[dict[str, Any]]:
-        """Fetch the per-context status list for a commit (ADR-0006 supervisor).
+        """Fetch the unified per-context status list for a commit (ADR-0006).
 
         Backs the supervisor's absence-of-signal detector: the required check
-        is "seen" iff a context with that name appears in this list. The combined
-        state is NOT used — the supervisor matches the required context by name
-        and reads its individual ``state`` (``success`` | ``failure`` |
-        ``error`` | ``pending``). Returns ``[]`` when no statuses have reported
-        yet (the absence case the detector fires on).
+        is "seen" iff a context with that name appears in this list. GitHub
+        has TWO status surfaces — legacy **status contexts**
+        (``/commits/{sha}/status``; external CI / status posts) and
+        **check-runs** (``/commits/{sha}/check-runs``; GitHub Actions).
+        Branch protection's ``required_status_checks.contexts`` rule unifies
+        them by name; this method does too, so an Actions-only repo (this one)
+        reads its required checks as *seen* rather than as *absent*.
+
+        Both surfaces are normalized to ``{"context": <name>, "state": <s>}``
+        where ``state`` is ``success`` | ``failure`` | ``error`` | ``pending``
+        | ``""``. Check-runs override legacy statuses of the same context name
+        (Actions is the modern default and the surface branch protection
+        honors for required checks). Returns ``[]`` when neither surface has
+        reported yet — the absence case the detector fires on.
         """
-        out = _run_gh([
-            "gh", "api", f"repos/{repo}/commits/{sha}/status",
+        # Legacy status contexts — already {context, state, ...}. Keyed by
+        # context name so the check-run pass below can override on collision.
+        merged: dict[str, dict[str, Any]] = {}
+        out_status = _run_gh([
+            "gh", "api", f"repos/{repo}/commits/{sha}/status", "--paginate",
         ])
-        stripped = out.strip()
-        if not stripped:
-            return []
-        data = json.loads(stripped)
-        statuses = data.get("statuses") if isinstance(data, dict) else None
-        return list(statuses) if isinstance(statuses, list) else []
+        stripped = out_status.strip()
+        if stripped:
+            data = json.loads(stripped)
+            statuses = data.get("statuses") if isinstance(data, dict) else None
+            if isinstance(statuses, list):
+                for st in statuses:
+                    ctx = st.get("context") or ""
+                    if ctx:
+                        merged[ctx] = {"context": ctx, "state": (st.get("state") or "")}
+
+        # Check-runs (GitHub Actions) — normalized, override on name collision.
+        out_runs = _run_gh([
+            "gh", "api", f"repos/{repo}/commits/{sha}/check-runs", "--paginate",
+        ])
+        stripped = out_runs.strip()
+        if stripped:
+            data = json.loads(stripped)
+            runs = data.get("check_runs") if isinstance(data, dict) else None
+            if isinstance(runs, list):
+                for run in runs:
+                    norm = _normalize_check_run(run)
+                    if norm.get("context"):
+                        merged[norm["context"]] = norm
+
+        return list(merged.values())
