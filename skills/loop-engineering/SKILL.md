@@ -225,7 +225,7 @@ The loop must:
 
 0.2.0: Close-out half wired (T5b, issue #29). Pure planner
 `scripts/closeout.py` (`plan_closeout`, `fix_prompt`, `resolution_comment`,
-`stuck_message`, `auto_merge_command`, `closeout_commands`; 3-round cap →
+`stuck_message`, `auto_merge_command`, `closeout_plan`; 3-round cap →
 `STUCK_REVIEW`; loop-only auto-merge on PASS; dual close). Driver stages in
 `scripts/loop.py` (`run_closeout_round`, `run_closeout_trajectory`) invoke the
 independent reviewer, hand findings verbatim to the same implementer,
