@@ -127,6 +127,25 @@ def required_status_contexts(repo: str = "CaicoLeung/skills") -> list[str]:
         return []
 
 
+def _drift_inputs(
+    repo_root: Path,
+    contexts: list[str] | None,
+    repo: str,
+) -> tuple[set[str], list[str]]:
+    """Resolve the two inputs the drift comparison shares.
+
+    Returns ``(workflow_job_names, required_contexts)``: job names come from
+    :func:`workflow_job_names` (pure), and required contexts are the injected
+    ``contexts`` when given, else fetched via :func:`required_status_contexts`
+    (the production path). Centralizing this keeps the network fallback in one
+    place for both :func:`drift_errors` and :func:`drift_info`.
+    """
+    workflows_dir = repo_root / ".github" / "workflows"
+    job_names = workflow_job_names(workflows_dir)
+    required = contexts if contexts is not None else required_status_contexts(repo)
+    return job_names, required
+
+
 def drift_errors(
     repo_root: Path,
     *,
@@ -149,13 +168,10 @@ def drift_errors(
     structural error survives — the per-context check is skipped gracefully.
     """
     errors: list[str] = []
-    workflows_dir = repo_root / ".github" / "workflows"
-
-    job_names = workflow_job_names(workflows_dir)
+    job_names, required = _drift_inputs(repo_root, contexts, repo)
     if not job_names:
         errors.append("no workflow job names found in .github/workflows/*.yml")
 
-    required = contexts if contexts is not None else required_status_contexts(repo)
     if not required:
         # Empty contexts (unauthenticated / no protection / injected-empty in a
         # test) — skip the per-context check gracefully, as before.
@@ -178,10 +194,7 @@ def drift_info(
     :func:`drift_errors`.
     """
     info: list[str] = []
-    workflows_dir = repo_root / ".github" / "workflows"
-    job_names = workflow_job_names(workflows_dir)
-
-    required = contexts if contexts is not None else required_status_contexts(repo)
+    job_names, required = _drift_inputs(repo_root, contexts, repo)
     if required:
         orphan_jobs = job_names - set(required)
         if orphan_jobs:
