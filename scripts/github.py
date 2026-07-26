@@ -36,17 +36,24 @@ from typing import Any, Protocol, Sequence, runtime_checkable
 
 @runtime_checkable
 class GitHubReader(Protocol):
-    """Read-only GitHub surface — the six ops the loop + CI check need.
+    """Read-only GitHub surface — the ops the loop, the CI check, and the
+    supervisor need.
 
     Repo-first param order throughout. Returns raw primitives (``list[str]``,
     ``str``, ``list[dict]``); the typed parsing (``Finding``,
-    ``SelectedFindings``) stays where it earns its keep, in :mod:`verdict` /
-    :mod:`review_verdict`. The gateway is transport, not a data model.
+    ``SelectedFindings``, :class:`supervise.GateState`) stays where it earns
+    its keep, in :mod:`verdict` / :mod:`review_verdict` / :mod:`loop`. The
+    gateway is transport, not a data model.
 
     ``issue_comments`` serves both PR and issue comments — they share the REST
     endpoint (``/repos/{repo}/issues/{n}/comments``), so one method covers
     both. Pagination is hidden inside it (``--paginate``): callers never want a
     partial comment thread.
+
+    Supervisor reads (ADR-0006): ``pr_merge_state`` and
+    ``commit_status_contexts`` are the gate-state surface the supervisor
+    observes. They are **platform state**, not agent internals — the
+    "don't poll agents" guidance never applied to them (ADR-0006 §4).
     """
 
     def issue_labels(self, repo: str, issue: int) -> list[str]: ...
@@ -55,6 +62,8 @@ class GitHubReader(Protocol):
     def pr_head_sha(self, repo: str, pr: int) -> str: ...
     def pr_diff(self, repo: str, pr: int) -> str: ...
     def pr_changed_files(self, repo: str, pr: int) -> list[str]: ...
+    def pr_merge_state(self, repo: str, pr: int) -> dict[str, Any]: ...
+    def commit_status_contexts(self, repo: str, sha: str) -> list[dict[str, Any]]: ...
 
 
 def _run_gh(argv: Sequence[str]) -> str:
@@ -77,6 +86,51 @@ def _run_gh(argv: Sequence[str]) -> str:
             f"{rendered} failed: {(exc.stderr or '').strip()}"
         ) from exc
     return result.stdout
+def _normalize_check_run(run: dict[str, Any]) -> dict[str, str]:
+    """Normalize a GitHub **check-run** into the supervisor's status shape.
+
+    GitHub reports Actions results as *check-runs*
+    (``/commits/{sha}/check-runs``), which the legacy
+    ``/commits/{sha}/status`` endpoint does NOT list. Branch protection's
+    ``required_status_checks.contexts`` rule unifies the two surfaces by name,
+    so the supervisor must too — otherwise an Actions-only repo (this one)
+    reads every required check as absent and falsely escalates after the
+    absence-of-signal deadline.
+
+    Maps a check-run's ``(status, conclusion)`` to the single ``state`` value
+    the supervisor already speaks (and that ``loop``'s gate-build reads off a
+    status-context entry)::
+
+        status      = queued | in_progress              -> "pending"
+        conclusion  = success                           -> "success"
+        conclusion  = failure | timed_out | cancelled
+                     | action_required                  -> "failure"
+        conclusion  = stale                             -> "error"
+        conclusion  = neutral | skipped | "" | unknown  -> ""   (ran, no pass/fail)
+
+    ``neutral`` / ``skipped`` map to ``""`` (not success, not failure): a
+    seen-but-neutral check is WAIT, never a pass. Pure function — no network,
+    unit-tested directly so the Actions/legacy unification is provable without
+    a live ``gh`` call.
+    """
+    name = run.get("name") or ""
+    status = (run.get("status") or "").lower()
+    conclusion = (run.get("conclusion") or "").lower()
+
+    if status in ("queued", "in_progress"):
+        state = "pending"
+    elif status == "completed":
+        if conclusion == "success":
+            state = "success"
+        elif conclusion in ("failure", "timed_out", "cancelled", "action_required"):
+            state = "failure"
+        elif conclusion == "stale":
+            state = "error"
+        else:  # neutral, skipped, "", or anything unrecognized
+            state = ""
+    else:
+        state = ""
+    return {"context": name, "state": state}
 
 
 class GhCliReader:
@@ -133,3 +187,81 @@ class GhCliReader:
         data = json.loads(out) if out.strip() else {}
         files = data.get("files") or []
         return [f.get("path") for f in files if f.get("path")]
+
+    def pr_merge_state(self, repo: str, pr: int) -> dict[str, Any]:
+        """Fetch the PR's merge-state fields the supervisor watches (ADR-0006).
+
+        Returns the four fields the supervisor's gate observation needs:
+        ``state`` (``OPEN`` | ``MERGED`` | ``CLOSED``), ``mergeStateStatus``
+        (``UNKNOWN`` | ``BEHIND`` | ``BLOCKED`` | ``CLEAN`` | ``DIRTY`` |
+        ``HAS_HOOKS``), ``mergedAt`` (ISO timestamp or ``""``), and
+        ``headRefOid`` (the head SHA — the supervisor needs it to fetch the
+        commit's status contexts in a follow-up call).
+
+        ``gh pr view --json`` is the GitHub CLI's stable projection; it hides
+        the GraphQL/REST split. Failure modes match the rest of the gateway:
+        ``gh`` missing or non-zero raises ``RuntimeError``.
+        """
+        out = _run_gh([
+            "gh", "pr", "view", str(pr),
+            "--repo", repo,
+            "--json", "state,mergeStateStatus,mergedAt,headRefOid",
+        ])
+        data = json.loads(out) if out.strip() else {}
+        return {
+            "state": data.get("state", "") or "",
+            "mergeStateStatus": data.get("mergeStateStatus", "") or "",
+            "mergedAt": data.get("mergedAt", "") or "",
+            "headRefOid": data.get("headRefOid", "") or "",
+        }
+
+    def commit_status_contexts(self, repo: str, sha: str) -> list[dict[str, Any]]:
+        """Fetch the unified per-context status list for a commit (ADR-0006).
+
+        Backs the supervisor's absence-of-signal detector: the required check
+        is "seen" iff a context with that name appears in this list. GitHub
+        has TWO status surfaces — legacy **status contexts**
+        (``/commits/{sha}/status``; external CI / status posts) and
+        **check-runs** (``/commits/{sha}/check-runs``; GitHub Actions).
+        Branch protection's ``required_status_checks.contexts`` rule unifies
+        them by name; this method does too, so an Actions-only repo (this one)
+        reads its required checks as *seen* rather than as *absent*.
+
+        Both surfaces are normalized to ``{"context": <name>, "state": <s>}``
+        where ``state`` is ``success`` | ``failure`` | ``error`` | ``pending``
+        | ``""``. Check-runs override legacy statuses of the same context name
+        (Actions is the modern default and the surface branch protection
+        honors for required checks). Returns ``[]`` when neither surface has
+        reported yet — the absence case the detector fires on.
+        """
+        # Legacy status contexts — already {context, state, ...}. Keyed by
+        # context name so the check-run pass below can override on collision.
+        merged: dict[str, dict[str, Any]] = {}
+        out_status = _run_gh([
+            "gh", "api", f"repos/{repo}/commits/{sha}/status", "--paginate",
+        ])
+        stripped = out_status.strip()
+        if stripped:
+            data = json.loads(stripped)
+            statuses = data.get("statuses") if isinstance(data, dict) else None
+            if isinstance(statuses, list):
+                for st in statuses:
+                    ctx = st.get("context") or ""
+                    if ctx:
+                        merged[ctx] = {"context": ctx, "state": (st.get("state") or "")}
+
+        # Check-runs (GitHub Actions) — normalized, override on name collision.
+        out_runs = _run_gh([
+            "gh", "api", f"repos/{repo}/commits/{sha}/check-runs", "--paginate",
+        ])
+        stripped = out_runs.strip()
+        if stripped:
+            data = json.loads(stripped)
+            runs = data.get("check_runs") if isinstance(data, dict) else None
+            if isinstance(runs, list):
+                for run in runs:
+                    norm = _normalize_check_run(run)
+                    if norm.get("context"):
+                        merged[norm["context"]] = norm
+
+        return list(merged.values())

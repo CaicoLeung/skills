@@ -1,7 +1,7 @@
 ---
 name: ticket-workflow-core
 description: "Runtime-neutral core for ticket-driven workflows — abstract primitives for execution, dependencies, failover, reasoning depth, gates, and supervision."
-version: 0.6.0
+version: 0.7.0
 requires:
   - project
   - tickets
@@ -154,7 +154,17 @@ The reviewer emits **only** findings (no `VERDICT` line). `scripts/reviewer.py` 
 
 ### SUPERVISE
 
-Supervisor role observes gate/merge state for a set of tasks, declares completion only on **merged-and-gated** (PR merged to base branch AND required CI checks passed), escalates within bounded window on stuck gates, isolates stuck subgraphs so independent tasks proceed.
+Supervisor role owns the gap between **agent-finished** (leaf posted `DONE` at
+turn-end) and **merged-and-gated** (PR merged to base branch AND required CI
+check genuinely passed). Nothing else owns that gap: a stuck gate produces an
+*absence of signal* that an agent-finished dependent would wait on forever
+(the `wf-skills-1` stall — a renamed workflow meant the required check never
+appeared, the leaf went idle, and nothing detected it).
+
+The supervisor, per task, watches gate state until merged-or-escalated. It
+**detects** deviations (including absence-of-signal), **classifies** them via
+an explicit triage state machine, and **acts** within a bounded retry budget
+that auto-escalates on exhaustion — never wait-forever.
 
 **Abstract shape:**
 ```
@@ -164,42 +174,98 @@ SUPERVISE workflow:
   base_branch: string
   bounded_window:
     interval_sec: 60
-    max_wait_sec: 3600
+    signal_deadline_sec: 300      # absence-of-signal deadline (per task)
+    max_wait_sec: 3600            # outer wall clock (informational)
     escalation_target: workflow_chat_room
   completion_condition:
-    type: "merged-and-gated"
+    type: "merged-and-gated"      # PR merged AND required check passed
     required_check: "validate-skills"
+  retry_budget:
+    max_gate_retries: 2           # redispatch cap; auto-escalate on exhaustion
+  triage:                         # the fix / escalate state machine
+    mechanical: [check_missing, merge_dirty, merge_behind]  # -> redispatch leaf
+    transient:  [check_failing]                            # -> redispatch leaf
+    genuine:    [merge_blocked]                            # -> escalate (any retry)
+    ambiguous:  [unknown]                                  # -> escalate (default-safe)
+  redispatch_action:
+    type: "send_to_leaf_with_failure"
+    detail_format: "the specific deviation, verbatim — no 'fix all' prose"
   escalation_action:
-    type: "post_stuck_gate_alert"
-    format: "STUCK_SUBGRAPH blocker=$taskId blocked=[$dependentIds...] pr=$pr_url reason=$reason"
+    type: "post_escalate_signal"
+    format: "ESCALATE task=$taskId pr=$pr_url deviation=$deviation blocked=[$dependentIds...] reason=$reason"
 ```
 
 **Semantics:**
 - Supervisor polls PR and CI state (via adapter API) — NOT agent internals.
-- Completes only when all tasks' PRs are merged AND required CI checks passed.
-- Stuck gate detection: after `max_wait_sec`, compute transitive closure of blocked tasks, escalate to chat room.
-- **Subgraph isolation:** Only transitive dependents of the stuck blocker are blocked; independent tasks proceed normally.
-- Polling gate state is NOT the "don't poll agents" anti-pattern — that warned against polling agent internals; gates are platform state you MUST observe because stuck = absence of notification.
+- **Completion is merged-and-gated only.** `pr_state=MERGED` AND
+  `check_state=success`. A merged PR with no check is NOT complete (the gate
+  did not genuinely pass) — this is the original sin in reverse, and the
+  supervisor refuses to read it as success.
+- **Triage state machine.** Every deviation maps to exactly one bucket:
+  - **mechanical** (check name drifted, needs rebase) → redispatch the SAME
+    leaf with the specific failure, **bounded by `max_gate_retries`**.
+  - **transient** (flaky test, currently failing) → redispatch the leaf
+    (the failure could be real or a flap; bounded retries separate the two).
+  - **genuine** (unsatisfiable branch protection) → **escalate at ANY retry
+    count**. Bounded retries do not apply — the leaf cannot fix this.
+  - **ambiguous** (unrecognized state) → **escalate**. Ambiguity defaults to
+    escalate, never silent pass — that was the original sin (an agent read a
+    blocked-but-passing PR as success).
+- **Bounded retry budget auto-escalates.** A mechanical/transient deviation
+  that does not converge after `max_gate_retries` redispatches escalates —
+  the cap is the never-wait-forever guarantee. Genuine/ambiguous deviations
+  skip the budget entirely (escalate immediately).
+- **Absence-of-signal is a deviation.** A required check that has not
+  reported within `signal_deadline_sec` is `check_missing` (mechanical), not
+  a silent wait. This is the exact `wf-skills-1` stall: the check never
+  appeared, the agent was already idle, nothing was watching.
+- **Subgraph isolation.** When a blocker escalates, only the **transitive
+  closure** of its dependents are blocked. Independent tasks (no path to the
+  blocker in the DAG) proceed normally.
+- Polling gate state is NOT the "don't poll agents" anti-pattern — that
+  warned against polling agent internals; gates are platform state you MUST
+  observe because stuck = absence of notification.
 
-**Completion signal:** When task is merged-and-gated, supervisor posts:
+**Completion signal** (posted only on merged-and-gated):
 ```
 DONE task_$taskId pr=$pr_url merged_at=$timestamp
 ```
-Dependents wait for this signal, not agent-finished.
+Dependents wait for this signal (filter on `DONE task_<id> pr=`, not the
+leaf's own `DONE task_<id>`), not agent-finished.
 
-**Escalation signal:** When task stuck beyond `max_wait_sec`, supervisor posts:
+**Redispatch action** (mechanical/transient, retries remain): re-dispatch the
+SAME leaf via the adapter's "send to existing agent" verb (e.g.
+`paseo send --agent $leaf_agent_id`) carrying the specific deviation detail
+verbatim — no "fix all issues" prose. The leaf pushes to the same branch; the
+supervisor re-observes the gate on its next interval and decides again. A
+deviation is "resolved" only when it disappears from the NEXT observation,
+never by the leaf's self-declaration (mirrors the GATE fix-loop contract).
+
+**Escalation signal** (genuine/ambiguous, OR retries exhausted):
 ```
-STUCK_SUBGRAPH blocker=$taskId blocked=[$dependentIds...] pr=$pr_url reason=timeout_after_${max_wait_sec}s
+ESCALATE task=$taskId pr=$pr_url deviation=$deviation blocked=[$dependentIds...] reason=$reason
 ```
-Dependents in `blocked` list wait on this blocker; others ignore.
+Posted to the workflow chat room AND as a durable `gh issue comment` (the
+chat room scrolls; the issue stays). A human must intervene; the supervisor
+does NOT auto-close. Dependents in `blocked` wait on this blocker; others
+ignore.
 
-**Honest reconciliation:**
-- DON'T poll agents (use `notifyOnFinish` / chat-room signals).
-- DO poll gate state (PR/CI) via platform API — supervisor's job.
-- Stuck = absence of signal; bounded window is the only way to detect it.
-- **Isolated blockage:** One stuck PR does NOT freeze the entire frontier — only its transitive dependents.
+**Honest reconciliation (the "don't poll" guidance):**
+- DON'T poll **agents** — use `notifyOnFinish` / chat-room signals. Agent
+  internals (CPU, turn state) are none of the supervisor's business.
+- DO poll **gate state** (PR merge state, CI check runs) via the platform
+  API. This is mandatory — a stuck gate is by definition an *absence of
+  notification*, and the bounded window is the only way to detect it.
+- The original "don't poll" guidance warned against the former; observing
+  gate state is the fix, not the anti-pattern it warned against.
 
-**Runtime mapping:** Adapters implement supervisor via their git host's API (e.g., `gh pr view`, `gh api` for GitHub). Bounded window interval and timeout are configurable defaults. Subgraph computation uses the dependency graph passed at workflow generation.
+**Runtime mapping:** Adapters implement the supervisor via their git host's
+API. The pure planner (`scripts/supervise.py`: `plan_supervise(state,
+retries_used, retry_budget)`) is runtime-neutral; the adapter supplies the
+I/O (the `gh pr view --json mergeStateStatus` + `gh api commits/$sha/status`
+reads, and the `paseo send` / `paseo chat post` / `gh issue comment` writes).
+Interval, deadline, and retry budget are configurable defaults. Subgraph
+computation uses the dependency graph passed at workflow generation.
 
 ## Inputs
 
@@ -285,6 +351,7 @@ This core is intentionally zero/low-dependency and provider-neutral. No runtime-
 
 ## Version Changes
 
+0.7.0: SUPERVISE primitive concretized with an explicit triage state machine (mechanical/transient → redispatch leaf; genuine/ambiguous → escalate), a bounded retry budget (`max_gate_retries`) that auto-escalates on exhaustion, and absence-of-signal as a first-class deviation (`check_missing` — a required check that never reports within `signal_deadline_sec`). Pure planner in `scripts/supervise.py` (`plan_supervise`, `GateState`, `SuperviseDecision`); driver in `scripts/loop.py` (`run_supervise_round`, `run_supervise_trajectory`, `supervise` CLI). Completion redefined as merged-and-gated only (PR merged AND check success — a merged PR with no check is NOT complete). ADR-0006 §T1 tracer bullet (issue #11).
 0.6.0: GATE reviewer-independence contract concretized (ADR-0007 §2) — five axes (invoker, prompt, model, workspace, input), each enforced structurally. Added the fixed, system-authored review prompt (`skills/ticket-workflow-core/review-prompt.md`) and the runtime-neutral reviewer core (`scripts/reviewer.py`): builds the prompt from diff + spec only, strips self-declared verdicts, and formats sha-tagged findings comments. The reviewer emits findings only; the verdict stays computed.
 0.5.0: GATE verdict protocol changed from self-declared to derived (ADR-0007). Removed `VERDICT pass|fail` schema. Verdict is computed by pure function from severity-tagged findings: `pass = (no CRITICAL/HIGH) AND (every changed file has coverage)`. MEDIUM/LOW are non-blocking warnings.
 0.4.0: DEPENDS_ON clarified — completion semantics now explicitly distinguish merged-and-gated (default) from agent-finished. Two-state completion documented: supervisor observes merged-and-gated, posts verified signal; dependents unblock on verified work, not agent-finished. Resolves gap #2.

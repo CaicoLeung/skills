@@ -48,3 +48,5 @@ jobs:
         run: python3 scripts/test_closeout.py
       - name: Run branch-protection drift-guard tests (ADR-0003)
         run: python3 scripts/test_branch_protection.py
+      - name: Run supervisor planner tests (ADR-0006 §T1 / issue #11)
+        run: python3 scripts/test_supervise.py

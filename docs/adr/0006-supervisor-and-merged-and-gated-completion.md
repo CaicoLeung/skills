@@ -83,16 +83,78 @@ This referred to **agent internals** — polling agent CPU/turn state is wrong. 
 - DO poll gate state (PR/CI) via platform API — supervisor's job.
 - Stuck = absence of signal; bounded window is the only way to detect it.
 
-### 5. Tracer bullet scope (T1)
+### 5. Tracer bullet (T1) — concretized (issue #11)
 
-T1 implements the thinnest slice:
-- Supervisor role defined (ADR-0006).
-- SUPERVISE primitive added to core.
-- Paseo adapter implements supervisor via `gh pr view` and `gh api` calls.
-- Bounded window: 60s interval, 3600s timeout.
-- Escalation: chat-room post.
+The original T1 slice (supervisor role + SUPERVISE primitive + bounded-window
+escalation) shipped as documentation. **Issue #11** concretized it into a
+runnable tracer bullet that closes the loop and catches the
+`wf-skills-1` stall. The concretization adds three things the doc-only T1
+lacked:
 
-T2 (DEPENDS_ON on merged-and-gated) and T3 (subgraph scoping) build on T1. T4 (verdict protocol) and T5 (status-check drift guard) run in parallel.
+1. **A triage state machine** (§6 below) — the supervisor classifies each
+   deviation into mechanical/transient (re-dispatch the leaf) vs.
+   genuine/ambiguous (escalate). The doc-only T1 had only a wall-clock
+   timeout; it could not tell a flaky rebase from an unsatisfiable protection
+   rule, and it had no re-dispatch path at all.
+2. **A bounded retry budget** (`MAX_GATE_RETRIES`) that auto-escalates on
+   exhaustion — the never-wait-forever guarantee. The doc-only T1's
+   `max_wait_sec` was an informational wall clock, not a per-deviation cap.
+3. **Absence-of-signal as a first-class deviation** (`check_missing`) — a
+   required check that has not reported within `signal_deadline_sec` is a
+   deviation, not a silent wait. This is the exact `wf-skills-1` stall:
+   renamed workflow → required check never appeared → leaf idle → nothing
+   watching. The doc-only T1's wall clock would eventually fire, but only
+   after a full hour of nothing; the signal deadline fires in minutes and
+   names the deviation.
+
+The pure planner is `scripts/supervise.py` (`plan_supervise`,
+:class:`GateState`, :class:`SuperviseDecision`); the thin I/O driver is
+`scripts/loop.py` (`run_supervise_round`, `run_supervise_trajectory`, the
+`supervise` CLI subcommand). The supervisor surface is a `paseo loop` /
+`paseo schedule` re-invoking the stateless planner once per interval — no
+daemon supervisor exists in Paseo 0.1.110.
+
+T2 (DEPENDS_ON on merged-and-gated) and T3 (subgraph scoping) build on T1.
+
+### 6. Triage state machine (T1 concretization — issue #11)
+
+Every observed deviation maps to exactly one triage bucket, and the bucket
+decides the action:
+
+| Bucket | Deviations | Action | Bounded? |
+| --- | --- | --- | --- |
+| **mechanical** | `check_missing`, `merge_dirty`, `merge_behind` | re-dispatch the SAME leaf via `paseo send` with the specific failure | yes — `MAX_GATE_RETRIES` |
+| **transient** | `check_failing` (currently red — could be flaky or real) | re-dispatch the leaf | yes — `MAX_GATE_RETRIES` |
+| **genuine** | `merge_blocked` (unsatisfiable branch protection) | `ESCALATE` signal | no — escalate at any retry |
+| **ambiguous** | `unknown` (unrecognized state) | `ESCALATE` signal | no — escalate at any retry |
+
+**Bounded retry budget.** `MAX_GATE_RETRIES = 2`. A mechanical/transient
+deviation that does not converge after two redispatches auto-escalates — the
+cap is the never-wait-forever guarantee. Genuine/ambiguous deviations skip
+the budget entirely (the leaf cannot fix them; no amount of redispatch will
+unblock an unsatisfiable protection rule). The driver advances
+`retries_used` per executed REDISPATCH.
+
+**Absence-of-signal detection.** A required check that has not appeared in
+the commit's status contexts within `signal_deadline_sec` (default 300s) is
+`check_missing`. This is NOT the wall-clock `max_wait_sec` — it is a
+per-observation test on `check_seen` + `signal_elapsed_sec`. Detection is
+what makes the `wf-skills-1` stall surface: the planner's `WAIT` action
+becomes `REDISPATCH` (then `ESCALATE`) instead of looping forever.
+
+**Ambiguity defaults to escalate.** The original sin (an agent read a
+blocked-but-passing PR as success) is structural now: `unknown` deviations
+and `BLOCKED` merge states escalate immediately, never silently pass. A
+merged PR with no check is likewise NOT complete (`merged_and_gated` requires
+both `pr_state=MERGED` AND `check_state=success`).
+
+**Re-dispatch handoff.** The leaf is re-dispatched via the adapter's
+"send to existing agent" verb (`paseo send --agent $leaf`) carrying the
+specific deviation detail verbatim — no "fix all issues" prose (mirrors the
+GATE fix-loop contract, ADR-0007). The leaf pushes; the supervisor
+re-observes the gate on its next interval. A deviation is "resolved" only
+when it disappears from the NEXT observation, never by the leaf's
+self-declaration.
 
 ## Consequences
 
@@ -110,6 +172,17 @@ T2 (DEPENDS_ON on merged-and-gated) and T3 (subgraph scoping) build on T1. T4 (v
 - ✅ Bounded triage: 60s interval, 3600s timeout, escalate to chat room.
 - ✅ Honest reconciliation documented: polling gate state ≠ polling agents.
 - ✅ Completion declared only on merged-and-gated (PR merged + CI green).
+
+## Acceptance Criteria (from issue #11 — T1 concretization)
+
+- ✅ Triage state machine implemented (`scripts/supervise.py: classify_deviation`, `plan_supervise`): mechanical/transient → redispatch, genuine/ambiguous → escalate.
+- ✅ Bounded retry budget (`MAX_GATE_RETRIES=2`) that auto-escalates on exhaustion.
+- ✅ Absence-of-signal as a first-class deviation (`check_missing`, `signal_deadline_sec` default 300s).
+- ✅ Re-dispatch via `paseo send` to the existing leaf (not `paseo run`).
+- ✅ Distinct completion vs escalation signals (`DONE task_$id pr=… merged_at=…` / `ESCALATE task=… pr=… deviation=…`).
+- ✅ `wf-skills-1` check-name-drift stall replayable and detected (`loop.py supervise --sequence … --dry-run`).
+- ✅ Runtime-neutral pure planner + thin I/O driver (ADR-0004 boundary preserved).
+- ✅ "Don't poll" reconciliation documented in §4 (polling *gate state* ≠ polling *agent internals*).
 
 ## Adapter Implementation Notes (Paseo)
 
@@ -134,5 +207,6 @@ paseo chat post "wf-$workflowId" \
 
 ## Version Implications
 
-- `ticket-workflow-core` v0.3.0 — adds SUPERVISE primitive, updates DEPENDS_ON semantics
-- `tickets-to-paseo` v0.4.0 — implements supervisor via gh CLI, bounded triage
+- `ticket-workflow-core` v0.3.0 (original T1) — adds SUPERVISE primitive, updates DEPENDS_ON semantics. **v0.7.0** (issue #11) — SUPERVISE primitive concretized (triage state machine, bounded retries, absence-of-signal); pure planner in `scripts/supervise.py`.
+- `tickets-to-paseo` v0.4.0 (original T1) — implements supervisor via gh CLI, bounded triage. **v0.7.0** (issue #11) — SUPERVISE mapping concretized (`paseo loop` drives `loop.py supervise`; `paseo send` redispatch; `ESCALATE` signal to chat + issue).
+- `loop-engineering` v0.3.0 (issue #11) — supervisor half documented (planner/driver split, token vocabulary, bounded retries, replay harness).

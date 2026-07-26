@@ -1,7 +1,7 @@
 ---
 name: loop-engineering
-description: "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch) and the close-out loop (review → derived verdict → fix → merge → close) and invokes external doing-skills as leaves (ADR-0008)."
-version: 0.2.0
+description: "Deterministic loop driver for ticket cycles — scripts the routing spine (readiness gate + type dispatch), the close-out loop (review → derived verdict → fix → merge → close), and the supervisor (triage → redispatch/escalate → merged-and-gated) and invokes external doing-skills as leaves (ADR-0008)."
+version: 0.3.0
 requires:
   - project
   - tickets
@@ -26,12 +26,16 @@ It documents the loop's shape; the executable spine lives in
 `/implement`, `/research`, …) **stay external** — the loop *invokes* them; it
 never carries them (ADR-0001 selective-fork principle).
 
-> **Status.** Routing half (T5a, issue #28) **and** close-out half (T5b,
-> issue #29) are wired: readiness gate + type dispatch open a PR carrying
-> `Fixes #N`, then the close-out loop drives independent review → derived
-> verdict → fix → merge → close. The pure close-out planner is
-> [`scripts/closeout.py`](../../scripts/closeout.py); the I/O driver lives in
-> [`scripts/loop.py`](../../scripts/loop.py) (`run_closeout_*`).
+> **Status.** Routing half (T5a, issue #28), close-out half (T5b, issue #29),
+> **and** supervisor half (T5c, issue #11) are wired: readiness gate + type
+> dispatch open a PR carrying `Fixes #N`, the close-out loop drives
+> independent review → derived verdict → fix → merge → close, and the
+> supervisor drives triage (mechanical/transient → redispatch;
+> genuine/ambiguous → escalate) → merged-and-gated completion. The pure
+> planners are [`scripts/closeout.py`](../../scripts/closeout.py),
+> [`scripts/supervise.py`](../../scripts/supervise.py); the I/O driver lives
+> in [`scripts/loop.py`](../../scripts/loop.py) (`run_closeout_*`,
+> `run_supervise_*`).
 
 ## The loop drives the agent; agents are leaves
 
@@ -102,6 +106,8 @@ stays as loop-*invoked* agent turns under system-authored prompts.
 | the implement prompt + the `Fixes #N` PR body | the *implementation* |
 | PR creation scaffold, the review prompt template | the review *findings* |
 | the derived verdict (`scripts/verdict.py`, ADR-0007) | — |
+| supervisor gate observation, the triage classification (`scripts/supervise.py`) | the leaf's *re-dispatch* fix (specific deviation, system-authored) |
+| the redispatch prompt + the completion/escalation signal | — |
 | auto-merge enablement, issue close | — |
 
 Because the loop authors every prompt and the close body, the implementer can
@@ -151,6 +157,54 @@ fix → merge → close. The decision is a pure function,
    `Fixes #N`, and the loop posts a
    [`closeout.resolution_comment`](../../scripts/closeout.py) (dual close).
 
+### Supervisor half (T5c, issue #11)
+
+The close-out loop ends at merge — but merge is necessary, not sufficient.
+A merged PR with no check is **not** complete (`wf-skills-1` stall pattern).
+The supervisor
+([`scripts/supervise.py`](../../scripts/supervise.py) planner +
+[`scripts/loop.py`](../../scripts/loop.py) driver) drives the gap between
+**agent-finished** (PR open or merged, leaf idle) and **merged-and-gated**
+(PR merged AND required check `success`). The decision is a pure function,
+[`supervise.plan_supervise(state, retries_used, retry_budget)`](../../scripts/supervise.py).
+
+Each interval the supervisor observes the gate (`gh pr view --json
+mergeStateStatus` + `gh api commits/$sha/status`), composes a
+`supervise.GateState`, and triages:
+
+| Bucket | Deviations | Action | Bounded? |
+| --- | --- | --- | --- |
+| **mechanical** | `check_missing`, `merge_dirty`, `merge_behind` | re-dispatch the SAME leaf via `paseo send` with the specific failure | yes |
+| **transient** | `check_failing` | re-dispatch the leaf | yes |
+| **genuine** | `merge_blocked` (unsatisfiable branch protection) | `ESCALATE` signal (chat + issue) | no |
+| **ambiguous** | `unknown` | `ESCALATE` signal | no |
+
+9. **Bounded retry budget.** `supervise.MAX_GATE_RETRIES` (2). A
+   mechanical/transient deviation that does not converge after two
+   redispatches auto-escalates — the never-wait-forever guarantee (mirrors
+   `closeout.MAX_REVIEW_ROUNDS` for the review fix-loop). Genuine/ambiguous
+   deviations skip the budget; ambiguity defaults to escalate, never silent
+   pass.
+10. **Absence-of-signal.** A required check that has not appeared in the
+    commit's status contexts within `signal_deadline_sec` (default 300s) is
+    `check_missing` (mechanical) — the supervisor redispatches the leaf in
+    minutes, not hours. This is the exact `wf-skills-1` stall: renamed
+    workflow → required check never appeared → leaf idle → nothing watching.
+    Detection is a per-observation test on `check_seen` +
+    `signal_elapsed_sec`, not a wall-clock timeout.
+11. **Redispatch handoff.** The leaf is re-dispatched with the deviation
+    detail verbatim
+    ([`supervise.redispatch_prompt`](../../scripts/supervise.py) — no "fix
+    all issues" prose, mirroring the GATE fix-loop). The leaf pushes to the
+    same branch; the supervisor re-observes the gate on its next interval.
+    A deviation is "resolved" only when it disappears from the NEXT
+    observation, never by self-declaration.
+12. **Completion signal.** Only when the gate is merged-and-gated does the
+    supervisor post `DONE task_$id pr=$url merged_at=$ts`. Dependents filter
+    on `DONE task_$id pr=` (so `task_1` does not substring-match `task_10`)
+    and unblock on this verified signal, not the leaf's agent-finished
+    `DONE task_$id`.
+
 ## Scope and escalation
 
 Per-ticket lifecycle only. The multi-ticket DAG (`DEPENDS_ON`, chat-room
@@ -175,6 +229,17 @@ python3 scripts/loop.py closeout 29 --pr 99 --outcomes fail,fail,fail --dry-run 
 python3 scripts/loop.py closeout 29 --pr 99 \
   --secondary-provider openai --secondary-model gpt-4o \
   --reviewer-login "$REVIEWER_LOGIN" --dry-run
+
+# Supervisor half — simulate a trajectory of gate states (no agents, no network):
+python3 scripts/loop.py supervise 11 --pr 99 --sequence missing,missing,missing --dry-run  # → REDISPATCH×2 → ESCALATE (wf-skills-1 stall)
+python3 scripts/loop.py supervise 11 --pr 99 --sequence failing,failing,merge --dry-run     # → REDISPATCH×2 → COMPLETE (flaky check recovers)
+python3 scripts/loop.py supervise 11 --pr 99 --sequence missing,merge --dry-run             # → REDISPATCH → COMPLETE (single redispatch converges)
+python3 scripts/loop.py supervise 11 --pr 99 --sequence blocked --dry-run                   # → ESCALATE (genuine, any retry)
+
+# Supervisor half — drive one live round for a PR (re-dispatches via `paseo send`):
+python3 scripts/loop.py supervise 11 --pr 99 \
+  --chat-room wf-skills-1 --leaf-agent agent-abc --task-id task_11 \
+  --retries-used 0 --signal-elapsed-sec 320 --dry-run
 ```
 
 The planners are pure and unit-tested:
@@ -183,11 +248,14 @@ The planners are pure and unit-tested:
 python3 scripts/test_routing.py     # two-axis router
 python3 scripts/test_loop.py        # routing turn-planning (T5a)
 python3 scripts/test_closeout.py    # close-out planner (T5b)
+python3 scripts/test_supervise.py   # supervisor planner (T5c)
 ```
 
 See [`docs/agents/closeout.md`](../../docs/agents/closeout.md) for the
-end-to-end demo procedure (claim → triage → implement → review → merge →
-close).
+close-out demo (claim → triage → implement → review → merge → close), and
+[`docs/agents/supervise.md`](../../docs/agents/supervise.md) for the
+supervisor demo (gate observation → triage → redispatch / escalate →
+merged-and-gated), including the `wf-skills-1` stall replay.
 
 ## Inputs
 
@@ -219,9 +287,27 @@ The loop must:
 - escalate `STUCK_REVIEW` at the 3-round cap — never silently pass;
 - enable auto-merge only on a passing derived verdict, and only the loop (never the implementer) merges;
 - dual-close: `Fixes #N` auto-close + a loop resolution comment;
-- keep doing-skills external (invoked, never carried).
+- keep doing-skills external (invoked, never carried);
+- observe gate state (PR + required check) per interval, never agent internals;
+- triage every deviation (mechanical/transient → redispatch the leaf; genuine/ambiguous → escalate);
+- bound the retry budget (`MAX_GATE_RETRIES`) and auto-escalate on exhaustion;
+- treat absence-of-signal as a deviation (`check_missing` after `signal_deadline_sec`);
+- declare completion only on merged-and-gated (PR merged AND check `success`), never on a merged PR with no check;
+- re-dispatch the leaf via the adapter's "send to existing agent" verb, not by spawning a new agent.
 
 ## Version Changes
+
+0.3.0: Supervisor half wired (T5c, issue #11). Pure planner
+`scripts/supervise.py` (`plan_supervise`, `classify_deviation`,
+`detect_deviation`, `GateState`, `SuperviseDecision`, `redispatch_prompt`,
+`completion_signal`, `escalate_signal`; triage state machine: mechanical/
+transient → redispatch leaf, genuine/ambiguous → escalate; bounded retry
+budget `MAX_GATE_RETRIES` auto-escalates on exhaustion; absence-of-signal as
+first-class deviation `check_missing` after `signal_deadline_sec`). Driver in
+`scripts/loop.py` (`run_supervise_round`, `run_supervise_trajectory`,
+`supervise` CLI subcommand with `--sequence` for CI-safe replay). Tests in
+`scripts/test_supervise.py`; demo in `docs/agents/supervise.md`. ADR-0006 §T1
+concretized.
 
 0.2.0: Close-out half wired (T5b, issue #29). Pure planner
 `scripts/closeout.py` (`plan_closeout`, `fix_prompt`, `resolution_comment`,

@@ -85,3 +85,60 @@ synonyms. Architecture decisions live in [`docs/adr/`](docs/adr/).
   `modeId` is the access mode of a `provider/model`; `thinkingOptionId` maps a
   reasoning-depth choice to a thinking option (omitted when the model has none).
   The canonical descriptor used everywhere is `{ provider, model, modeId }`.
+
+- **Supervisor** — the role that closes the gap between **agent-finished**
+  (work submitted, leaf idle) and **merged-and-gated** (work verified). For
+  each task's PR the supervisor observes gate state — PR merge state via
+  `gh pr view`, the required check's status via `gh api commits/$sha/status`
+  — never agent internals — and applies the triage state machine below.
+  Runtime-neutral core is `scripts/supervise.py: plan_supervise`; the thin
+  I/O driver is `loop.py supervise` (`run_supervise_round`,
+  `run_supervise_trajectory`). In Paseo 0.1.110 the supervisor surface is a
+  `paseo loop` / `paseo schedule` re-invoking the stateless planner once per
+  interval (no daemon supervisor exists).
+  _Avoid_: "watcher" (implies idle polling of agents — supervisor polls gate
+  state, not agents), "monitor" (same), "cron job" (the `paseo loop` is the
+  cron-like surface; the supervisor is the decision logic).
+
+- **Merged-and-gated completion** — a task is complete only when **both** hold:
+  the PR's state is `MERGED` **and** the required CI check (`validate-skills`,
+  `review-verdict`) reported `success`. A merged PR with no check is **NOT**
+  complete (the `wf-skills-1` stall pattern). The supervisor posts the
+  completion signal (`DONE task_$id pr=$url merged_at=$ts`) only at this
+  point; dependents filter on `DONE task_$id pr=` so they unblock on the
+  verified signal, not the leaf's agent-finished `DONE task_$id`.
+  _Avoid_: "merged" (necessary but insufficient — elides the check), "done"
+  (overloaded — also means agent-finished).
+
+- **Triage state machine** — the supervisor's per-observation decision logic.
+  Every deviation maps to exactly one bucket, and the bucket picks the action:
+  `mechanical` (`check_missing`, `merge_dirty`, `merge_behind`) and
+  `transient` (`check_failing`) → re-dispatch the SAME leaf via `paseo send`
+  with the specific failure (bounded); `genuine` (`merge_blocked`,
+  unsatisfiable branch protection) and `ambiguous` (`unknown`) → escalate at
+  any retry. Ambiguity defaults to escalate, never silent pass. Implemented
+  by `scripts/supervise.py: classify_deviation`, `detect_deviation`,
+  `plan_supervise`.
+  _Avoid_: "policy" (too generic), "rules engine" (no dynamic registration).
+
+- **Bounded retry budget** — `MAX_GATE_RETRIES = 2`. A mechanical/transient
+  deviation that does not converge after two redispatches auto-escalates —
+  the never-wait-forever guarantee. Genuine/ambiguous deviations skip the
+  budget (the leaf cannot fix them; no amount of redispatch unblocks an
+  unsatisfiable protection rule). The driver advances `retries_used` per
+  executed REDISPATCH, mirroring `closeout.MAX_REVIEW_ROUNDS = 3` for the
+  review fix-loop.
+  _Avoid_: "retry count" (a count is not a budget; the budget has a fixed
+  cap and exhausts).
+
+- **Absence-of-signal** — a first-class supervisor deviation, distinct from
+  "still waiting". A required check that has not appeared in the commit's
+  status contexts within `signal_deadline_sec` (default 300s) is
+  `check_missing` (mechanical) — the supervisor re-dispatches the leaf within
+  bounded time rather than waiting a full hour. This is the exact
+  `wf-skills-1` stall: a renamed workflow meant the required check never
+  appeared, the leaf went idle, and nothing watched. Detection is a
+  per-observation test on `check_seen` + `signal_elapsed_sec`, not a
+  wall-clock timeout.
+  _Avoid_: "timeout" (a wall clock; absence-of-signal is a test on observed
+  state, and is much faster than the wall-clock `max_wait_sec`).
