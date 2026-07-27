@@ -2,32 +2,25 @@
 
 How a skill asks the user questions so every question is numbered, every option
 is numbered, and any past question is referenceable by number. The convention
-is recorded as [ADR-0009](../adr/0009-question-numbering-convention.md) and
-machine-enforced for skills authored in this repo by
-`scripts/validate-skills.py` (the existing `validate-skills` CI gate).
+is recorded as [ADR-0009](../adr/0009-question-numbering-convention.md). The
+skill-frontmatter enforcement was retired in
+[ADR-0012](../adr/0012-reverse-skill-reframe-loop-driver-tool.md); the
+convention now binds the Loop Driver's `grilling`-type dispatch.
 
 ## When it binds
 
-A skill **declares** that it interviews the user by asserting the optional
-frontmatter flag:
+The convention binds the Loop Driver's **`grilling`**-type dispatch. When the
+driver routes a `grilling` ticket, its dispatch prompt points the external
+`/grilling` skill at this doc (`scripts/loop.py`, `dispatch_prompt`), so the
+interview runs under `Question N:` / numbered options / `Recommended: N. because
+…` form rather than free prose.
 
-```yaml
----
-name: my-interview-skill
-description: "…"
-version: 0.1.0
-requires: []
-produces: []
-asks-user-questions: true
----
-```
-
-When `asks-user-questions: true` is asserted, the skill's `SKILL.md` body
-**must reference this doc** (`docs/agents/question-numbering.md`). The
-validator rejects the build if it does not. Absence of the flag means the skill
-does not interview and the convention does not bind it. (See
-[ADR-0002](../adr/0002-skill-frontmatter-contract.md), amended by ADR-0009, and
-[skills.md](skills.md).)
+The skill-frontmatter enforcement — the `asks-user-questions: true` flag, the
+build-time validator, and the `skills/` surface — was retired in
+[ADR-0012](../adr/0012-reverse-skill-reframe-loop-driver-tool.md); the
+convention survives as a driver concern, recorded in
+[ADR-0009](../adr/0009-question-numbering-convention.md), not as a skill
+contract.
 
 ## Two interview paths
 

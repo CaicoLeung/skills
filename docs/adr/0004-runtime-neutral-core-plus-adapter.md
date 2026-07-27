@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-24
 - **Supersedes:** —
+- **Voided by:** [ADR-0012](./0012-reverse-skill-reframe-loop-driver-tool.md) (the skill surface is deleted — no core skill, no adapter skill)
 
 ## Context
 

@@ -7,11 +7,11 @@ job in ``.github/workflows/*.yml``. A required context with no matching job
 fails the guard, so renaming a job (or a context) without the other surfaces as
 a drift error instead of silently breaking the merge gate.
 
-Extracted from ``scripts/skills.py`` (issue #53) so ``validate`` shrinks to its
-real job — frontmatter + schema, with no network side-effect — and the guard
-earns its own seam, its own CLI, and its own tests. Consistent with ADR-0003:
-the gate is **honored, not weakened**; extraction gives it a dedicated, visible
-home. The live ``validate-skills`` CI job runs this as its own step.
+Drift guard for the branch-protection required-context ↔ workflow-job mapping.
+Consistent with ADR-0003 (the gate is **honored, not weakened**); ADR-0012
+retired the ``validate-skills`` CI job when the skill surface was deleted, so
+the guard no longer has a CI runner — run it locally
+(``python3 scripts/branch_protection.py``) or give it a new workflow home.
 
 The pure drift logic (:func:`workflow_job_names`, :func:`missing_job_errors`)
 has no network and is unit-tested directly; the GitHub REST fetch

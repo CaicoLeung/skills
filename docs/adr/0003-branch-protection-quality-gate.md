@@ -3,7 +3,7 @@
 - **Status:** Superseded
 - **Date:** 2026-07-24
 - **Supersedes:** —
-- **Superseded by:** [ADR-0011](./0011-agent-skill-product-reframe.md) (2026-07-26) — in-repo implementation decision; reference implementation retired, discipline survives in the skills.
+- **Superseded by:** [ADR-0013](./0013-ci-gate-optional-local-verdict-gates.md) (2026-07-27) — this repo now has **no** required status-check contexts (`validate-skills` retired by ADR-0012, `review-verdict` retired by ADR-0013). The branch-protection-as-enforcement **mechanism** below remains valid for consumers who opt into CI gating; the specific `contexts: [...]` config is this repo's historical record.
 - **Related:** [ADR-0004](./0004-runtime-neutral-core-plus-adapter.md)
 
 ## Context
