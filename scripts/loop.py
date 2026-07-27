@@ -37,7 +37,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 # Allow ``python3 scripts/loop.py`` (script) and ``from scripts.loop import``
 # (pytest) to both find the sibling ``routing`` module.
@@ -377,6 +377,24 @@ def turn_status(turn: Turn, issue_number: int) -> str:
     return f"{turn.skill} turn invoked (AFK)"
 
 
+def _run_check(cmd: list[str], **kwargs: Any) -> int:
+    """Run ``cmd``; wrap a non-zero exit as ``RuntimeError``.
+
+    The driver's CLI boundary catches ``RuntimeError`` (twin of
+    :func:`github._run_gh`), so a failed ``paseo`` / ``gh`` shell invocation
+    must surface as one — not as a bare ``subprocess.CalledProcessError`` that
+    escapes the handler and crashes with a traceback. This is the default
+    ``runner`` for :func:`run_ticket_loop`, :func:`run_closeout_round`, and
+    :func:`run_supervise_round`, so batch's fail-stop and every subcommand's
+    ``except RuntimeError`` CLI catch both observe the failure (ADR-0012 §2).
+    """
+    try:
+        return subprocess.run(cmd, check=True, **kwargs).returncode
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"command exited {exc.returncode}: {' '.join(shlex.quote(c) for c in cmd)}"
+        ) from exc
+
 def run_ticket_loop(
     issue_number: int,
     cfg: Optional[DriverConfig] = None,
@@ -409,7 +427,7 @@ def run_ticket_loop(
     PR opened."
     """
     cfg = cfg or DriverConfig()
-    run = runner or (lambda cmd: subprocess.run(cmd, check=True).returncode)
+    run = runner or _run_check
     reader = gh or GhCliReader()
 
     labels = reader.issue_labels(cfg.repo, issue_number)
@@ -787,7 +805,7 @@ def run_closeout_round(
             reads. Defaults to :class:`github.GhCliReader`. Twin of ``runner``.
     """
     cfg = cfg or DriverConfig()
-    run = runner or (lambda cmd, **kw: subprocess.run(cmd, check=True, **kw).returncode)
+    run = runner or _run_check
     reader = gh or GhCliReader()
 
     sha = head_sha or reader.pr_head_sha(cfg.repo, pr_number)
@@ -994,7 +1012,7 @@ def run_supervise_round(
             reads. Twin of ``runner``.
     """
     cfg = cfg or DriverConfig()
-    run = runner or (lambda cmd, **kw: subprocess.run(cmd, check=True, **kw).returncode)
+    run = runner or _run_check
     reader = gh or GhCliReader()
 
     state = gate_state if gate_state is not None else read_gate_state(
@@ -1400,11 +1418,21 @@ def _batch_parser(sub) -> None:
 
 
 
-def _route_main(args) -> int:
-    cfg = DriverConfig(
-        repo=args.repo, base_branch=args.base,
-        provider=args.provider, model=args.model, mode=args.mode,
+def _cfg_from_args(args, **fields: Any) -> DriverConfig:
+    """Build a :class:`DriverConfig` from the CLI args shared across subcommands.
+
+    Every subcommand shares ``--repo`` / ``--base`` / ``--mode``; the
+    subcommand-specific knobs (provider/model for dispatch, secondary_* for
+    close-out, chat_room/leaf_agent_id/required_check for supervise) come in as
+    ``**fields``. Centralizes the data-clump that used to be rebuilt in each
+    ``_*_main``.
+    """
+    return DriverConfig(
+        repo=args.repo, base_branch=args.base, mode=args.mode, **fields,
     )
+
+def _route_main(args) -> int:
+    cfg = _cfg_from_args(args, provider=args.provider, model=args.model)
     try:
         report = run_ticket_loop(args.issue, cfg, dry_run=args.dry_run)
     except RuntimeError as exc:
@@ -1431,9 +1459,9 @@ _OUTCOME_TOKENS = {
 
 
 def _closeout_main(args) -> int:
-    cfg = DriverConfig(
-        repo=args.repo, base_branch=args.base,
-        provider=args.provider, model=args.model, mode=args.mode,
+    cfg = _cfg_from_args(
+        args,
+        provider=args.provider, model=args.model,
         secondary_provider=args.secondary_provider,
         secondary_model=args.secondary_model,
         reviewer_login=args.reviewer_login,
@@ -1477,8 +1505,8 @@ def _closeout_main(args) -> int:
 
 
 def _supervise_main(args) -> int:
-    cfg = DriverConfig(
-        repo=args.repo, base_branch=args.base, mode=args.mode,
+    cfg = _cfg_from_args(
+        args,
         chat_room=args.chat_room, leaf_agent_id=args.leaf_agent,
         required_check=args.required_check,
     )
@@ -1533,10 +1561,7 @@ def _supervise_main(args) -> int:
 
 
 def _batch_main(args) -> int:
-    cfg = DriverConfig(
-        repo=args.repo, base_branch=args.base,
-        provider=args.provider, model=args.model, mode=args.mode,
-    )
+    cfg = _cfg_from_args(args, provider=args.provider, model=args.model)
     try:
         report = run_batch(
             cfg, label=args.label, limit=args.limit, dry_run=args.dry_run,

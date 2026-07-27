@@ -10,7 +10,7 @@ two-axis routing that consumes these types.
 The loop gates on readiness **first** (a ticket that is not `ready-for-agent`
 never reaches type dispatch), then dispatches on type. Type is set at ticket
 creation and read deterministically — never inferred from prose, since inference
-is the unreliability Loop Engineering exists to remove.
+is the unreliability the Loop Driver exists to remove.
 
 | Type label | Mode | Skill (external, invoked) | Resolution ritual |
 | --- | --- | --- | --- |
@@ -46,6 +46,6 @@ turn** — the loop never fakes the human's side of the exchange.
 ## Mirrors `wayfinder`'s vocabulary
 
 The four types mirror `wayfinder`'s `research` / `prototype` / `grilling` /
-`task` vocabulary, keeping this fork's routing aligned with upstream. They are
+task` vocabulary, keeping the routing aligned with `mattpocock/skills`. They are
 **not** the bug/enhancement *category* (reserved for triage classification) —
 type is the *kind of work* the loop dispatches on.

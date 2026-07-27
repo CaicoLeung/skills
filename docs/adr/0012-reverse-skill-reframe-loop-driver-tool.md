@@ -40,8 +40,9 @@ Agent Skill product surface.**
 1. **The driver is restored.** The tree retired in ADR-0011 is restored from
    `095339d^`: `scripts/{loop,routing,closeout,reviewer,verdict,review_verdict,
    github,supervise,_test_fakes}.py`, their tests, `tests/test_verdict.py`,
-   `.github/workflows/review-verdict.yml`, and the `docs/agents/{closeout,
-   review-verdict,supervise}.md` behavior docs. The driver is the product.
+   and the `docs/agents/{closeout,review-verdict,supervise}.md` behavior docs.
+   The driver is the product. (The `review-verdict.yml` workflow is *not*
+   restored — ADR-0013, same day, retires it before restore; see §1 there.)
 2. **A `batch` subcommand is added** (`scripts/loop.py batch`): drains the
    `ready-for-agent` queue via `gh issue list`, dispatching the implement turn
    for each, up to `--limit`, with fail-stop on the first dispatch error. One

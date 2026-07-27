@@ -161,8 +161,12 @@ def select_current_findings(
 # place. The pure selection core above never touches the network.
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    """CI entry point: fetch findings, derive verdict, exit with its code."""
+def main(argv: Optional[list[str]] = None, reader: Optional["GitHubReader"] = None) -> int:
+    """CI entry point: fetch findings, derive verdict, exit with its code.
+
+    ``reader`` defaults to the live :class:`github.GhCliReader`; inject a fake
+    to unit-test the exit-code branches (ADR-0013 §4 — the reusable gate).
+    """
     import argparse
     import json
 
@@ -203,7 +207,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"::error::review-verdict missing required input: {', '.join(missing)}")
         return 2
 
-    reader = GhCliReader()
+    if reader is None:
+        reader = GhCliReader()
     try:
         comments = reader.issue_comments(args.repo, args.pr)
         changed = reader.pr_changed_files(args.repo, args.pr)

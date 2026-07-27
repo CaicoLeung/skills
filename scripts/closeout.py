@@ -278,8 +278,9 @@ def stuck_message(issue_number: int, pr_url: str, round: int) -> str:
 
 # --- Loop-only merge authority ----------------------------------------------
 # Parent #23 story 27 / ADR-0007 §4: the LOOP enables auto-merge, only after
-# the derived verdict passes; GitHub merges when both checks are green. The
-# implementer never runs this — there is no path from a fix turn to merge.
+# the derived verdict passes — the gate is that derivation (ADR-0013; no CI
+# gate by default). The implementer never runs this — there is no path from
+# a fix turn to merge.
 
 
 def auto_merge_command(repo: str, pr_number: int) -> list[str]:

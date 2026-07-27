@@ -2,10 +2,10 @@
 """Unit tests for the review-verdict CI check (T3 / ADR-0007 enforcement).
 
 Zero-dependency: runnable directly as ``python3 scripts/test_review_verdict.py``.
-Exits non-zero on any failure. Covers the **pure** selection logic — the only
-non-trivial behavior in the review-verdict step — without any ``gh`` or network
-calls. ``main()``'s GitHub I/O is exercised end-to-end by the live demo, not
-here.
+Exits non-zero on any failure. Covers the **pure** selection logic plus
+``main()``'s exit-code contract (via an injected fake reader — no ``gh`` or
+network). ``main()``'s live GitHub I/O is also exercised end-to-end by the
+demo.
 
 The tested contract (ADR-0007 enforcement):
 
@@ -207,10 +207,69 @@ def main() -> int:
     failed += _run("clean -> pass", t_clean_passes)
     failed += _run("non-blocking warning -> pass", t_nonblocking_warning_passes)
 
+    # --- main(): exit-code contract (CI gate behavior) ---------------------
+    # main() is the consumer-side CI entry point (ADR-0013 §4). Its contract
+    # is its exit code: 2 = bad input / gh read fail, 1 = no current review or
+    # verdict fail, 0 = pass. The injected reader (twin of every other driver)
+    # makes the branches unit-testable without gh/network — so main() is now
+    # tested, not just the pure selection core.
+    print("main() exit-code contract:")
+    from _test_fakes import FakeGitHubReader  # noqa: E402
+
+    REPO = "owner/repo"
+    PR = 1
+
+    def _argv(sha: str = HEAD) -> list[str]:
+        return ["--repo", REPO, "--pr", str(PR), "--sha", sha,
+                "--reviewer-login", "reviewer-bot"]
+
+    class _RaisingReader:
+        def issue_comments(self, repo, pr):
+            raise RuntimeError("gh boom")
+        def pr_changed_files(self, repo, pr):
+            return []
+
+    def t_missing_args_exit_2():
+        code = rv.main(argv=[], reader=FakeGitHubReader())
+        return (code == 2, f"got {code}")
+
+    def t_gh_read_fail_exit_2():
+        code = rv.main(argv=_argv(), reader=_RaisingReader())
+        return (code == 2, f"got {code}")
+
+    def t_no_current_review_exit_1():
+        fake = FakeGitHubReader()
+        fake.comments[PR] = [_findings(OTHER, "[scripts/f.py]: OK")]  # stale sha
+        fake.changed_files[PR] = ["scripts/f.py"]
+        code = rv.main(argv=_argv(), reader=fake)
+        return (code == 1, f"got {code}")
+
+    def t_blocking_finding_exit_1():
+        fake = FakeGitHubReader()
+        fake.comments[PR] = [
+            _findings(HEAD, "[scripts/f.py:9]: HIGH: null deref", login="reviewer-bot")
+        ]
+        fake.changed_files[PR] = ["scripts/f.py"]
+        code = rv.main(argv=_argv(), reader=fake)
+        return (code == 1, f"got {code}")
+
+    def t_clean_review_exit_0():
+        fake = FakeGitHubReader()
+        fake.comments[PR] = [_findings(HEAD, "scripts/f.py: OK", login="reviewer-bot")]
+        fake.changed_files[PR] = ["scripts/f.py"]
+        code = rv.main(argv=_argv(), reader=fake)
+        return (code == 0, f"got {code}")
+
+    failed += _run("missing args -> exit 2", t_missing_args_exit_2)
+    failed += _run("gh read fail -> exit 2", t_gh_read_fail_exit_2)
+    failed += _run("no current review -> exit 1", t_no_current_review_exit_1)
+    failed += _run("blocking finding -> exit 1", t_blocking_finding_exit_1)
+    failed += _run("clean review -> exit 0", t_clean_review_exit_0)
+
     # --- summary -----------------------------------------------------------
     total = 19  # 5 + 7 + 4 + ... keep in sync with _run calls above
     # (Recount robustly below.)
-    total = 5 + 7 + 4
+    total = 5 + 7 + 4 + 5
     if failed:
         print(
             f"\n{failed} review-verdict test(s) failed (of {total}).",
