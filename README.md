@@ -16,7 +16,7 @@ skills/
 
 | Skill | Purpose |
 |---|---|
-| [zh-en-translation-drill](skills/zh-en-translation-drill/) | 中译英翻译练习陪练：AI 出题、逐句批改、追踪弱项 |
+| [zh-en-translation-drill](skills/zh-en-translation-drill/) | Chinese-to-English translation drill coach: AI generates sentences, corrects each translation, tracks weak spots |
 
 ## Install
 
