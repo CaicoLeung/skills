@@ -35,6 +35,7 @@ cp -R skills/<skill-name> ~/.agents/skills/<skill-name>
 ## Conventions
 
 - One skill per directory under `skills/`, directory name = skill name.
+- **All skill content in English** — SKILL.md, reference docs, and data-file structure. Non-English text is allowed only when it is functional content (e.g. quoted source sentences, trigger phrases that must match user utterances).
 - `SKILL.md` frontmatter must have `name` and `description`.
 - Keep `SKILL.md` lean; push detail into `reference/`, runtime state into `data/`.
 - Never commit secrets or personal data outside what the skill needs.

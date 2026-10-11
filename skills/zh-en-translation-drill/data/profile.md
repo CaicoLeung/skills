@@ -1,37 +1,37 @@
-# 学员档案
+# Learner Profile
 
-- 难度：B1 · 日常
-- 累计轮数：6
-- 均分走势：R1 = 2.33 / 5 → R2 = 4.0 → R3 = 4.1 → R4 = 4.2 → R5 = 3.7（B1 首轮）→ R6 = 4.1（分项 语法 4.2 / 用词 4.2 / 地道 3.8）
+- Level: B1 · everyday
+- Total rounds: 6
+- Score trend: R1 = 2.33 / 5 → R2 = 4.0 → R3 = 4.1 → R4 = 4.2 → R5 = 3.7 (first B1 round) → R6 = 4.1 (grammar 4.2 / vocabulary 4.2 / idiomaticity 3.8)
 
-## 标签累计
-- `article-missing-the` ×3（R1；R5 from fridge；R6 for kids）——最顽固
-- `of-overuse-from-de` ×2（R5 tickets of；R6 answer of）
-- `source-misread` ×3（R5 后未再发）
-- `modal-mixed-structure` ×2（R5–R6 陷阱连续通过，移出）
-- `person-plural-people` ×1（R6，新）
-- `so-far-vs-yet` ×1（R6，新）
-- `linking-verb-missing-are` ×1（R6，新）
-- `passive-be-plus-base-form` ×1（R6 was developed 全中，修复）
-- `verb-tense-flat` ×1（R6 被动句时态通过，观察）
-- `uncountable-forced-plural` ×1（R5）
-- `overtime-vs-over-time` ×1（R5）
-- `capitalization-day-names` ×1（R5）
-- `structure-splice-leftover` ×1（R5）
-- `third-person-s` ×3（R6 takes 通过，连续三轮命中，弱化）
-- `everyday-vs-every-day` ×2（R6 every morning 通过，移出观察）
-- 其余 R1–R5 一次性标签：`article-missing-a` `collocation-wrong-partner` `spelling-typo` `time-adverbial-order` `there-be-agreement-nearest` `distance-close-structure` `intransitive-verb-object` `run-on-comma-splice` `modal-plus-past-form` `rest-vs-reset` `finite-verb-missing-ing` `base-form-after-aux` `transitive-verb-extra-prep` 各 ×1
+## Cumulative tags
+- `article-missing-the` ×3 (R1; R5 "from fridge"; R6 "for kids") — most stubborn
+- `of-overuse-from-de` ×2 (R5 "tickets of"; R6 "answer of")
+- `source-misread` ×3 (none since R5)
+- `modal-mixed-structure` ×2 (trap passed in both R5–R6, removed)
+- `person-plural-people` ×1 (R6, new)
+- `so-far-vs-yet` ×1 (R6, new)
+- `linking-verb-missing-are` ×1 (R6, new)
+- `passive-be-plus-base-form` ×1 (R6 "was developed" nailed, fixed)
+- `verb-tense-flat` ×1 (R6 passive-tense passed, watching)
+- `uncountable-forced-plural` ×1 (R5)
+- `overtime-vs-over-time` ×1 (R5)
+- `capitalization-day-names` ×1 (R5)
+- `structure-splice-leftover` ×1 (R5)
+- `third-person-s` ×3 (R6 "takes" passed, hit three rounds in a row, weakening)
+- `everyday-vs-every-day` ×2 (R6 "every morning" correct, moved to watch list)
+- One-off tags R1–R5: `article-missing-a` `collocation-wrong-partner` `spelling-typo` `time-adverbial-order` `there-be-agreement-nearest` `distance-close-structure` `intransitive-verb-object` `run-on-comma-splice` `modal-plus-past-form` `rest-vs-reset` `finite-verb-missing-ing` `base-form-after-aux` `transitive-verb-extra-prep`, ×1 each
 
-## R6 表现
-- 被动修复：was developed by 全中；第二句机敏换 arrive 绕开被动（母语者策略）
-- everyday 移出观察（every morning 正确）；of 陷阱第一句通过（presents for）第二句复发（answer of）
-- 新问题：句子里没动词（These presents for kids）；泛化翻译（拆错→make a mistake）
-- the 第三次复发，升为头号目标
+## R6 performance
+- Passive repair: "was developed by" fully correct; sentence 2 cleverly dodged the passive by switching to "arrive" (native-speaker strategy)
+- "everyday" off the watch list ("every morning" correct); "of" trap passed in sentence 1 ("presents for"), relapsed in sentence 2 ("answer of")
+- New problems: verbless sentence ("These presents for kids"); over-generalized translation (拆错 → "make a mistake")
+- "the" relapsed a third time — promoted to the #1 target
 
-## 当前弱项 Top3
-1. `article-missing-the` ×3 —— the 的「双方已知」触发条件没内化
-2. `of-overuse-from-de` ×2 —— 「的→of」家族：answer to / key to / solution to / tickets for
-3. `linking-verb-missing-are` ×1 —— 「是……的」句漏系动词（新发，观察是否复发）
+## Current Top-3 weak spots
+1. `article-missing-the` ×3 — the "shared knowledge" trigger for "the" isn't internalized
+2. `of-overuse-from-de` ×2 — the 「的→of」 family: answer to / key to / solution to / tickets for
+3. `linking-verb-missing-are` ×1 — missing copula in 「是……的」 sentences (new, watching for recurrence)
 
-## 下一轮
-R7 · B1：埋 the×2 + of 陷阱×1 + 被动复验×1 + 「是…的」句×1。
+## Next round
+R7 · B1: plant the×2 + of-trap×1 + passive re-check×1 + 「是…的」sentence×1.
